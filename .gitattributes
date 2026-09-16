@@ -1,0 +1,13 @@
+# NASA shipped this drop with CRLF line endings and every file in the history
+# has them. Say "no conversion" explicitly so git's autocrlf -- which is on by
+# default on the Windows boxes here and off on macOS -- cannot rewrite them.
+#
+# It matters in both directions:
+#   * demoout/ is the reference output the regression suite diffs our own runs
+#     against, so a checkout that flips endings diffs on every line of every
+#     file and hides the one line that really moved.
+#   * inp/ decks are read by a fixed-form card reader that counts columns.
+#
+# gfortran reads CRLF fixed-form source without complaint, and on Windows it
+# writes CRLF formatted output, so the reference files and our output agree.
+* -text

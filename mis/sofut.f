@@ -7,6 +7,10 @@ C
 C     SOFUT     //V,N,DRY/C,N,NAME1/C,N,OPER/C,N,OPT/C,N,NAME2/
 C                 C,N,PREFX/C,N,IA/C,N,IB/C,N,IC/C,N,ID/C,N,IE $
 C
+C HALO: RENAME is a gfortran GNU intrinsic subroutine (two or three
+C HALO:   arguments, renames a file). The RENAME meant here is NASTRAN own
+C HALO:   five-argument substructure rename in mis/rename.f.
+      EXTERNAL        RENAME
       LOGICAL         DITUP
       INTEGER         DRY,OPER,OPT,PREFX,SYSBUF,DELE,RENAM,NAME(2)
       CHARACTER       UFM*23,UWM*25

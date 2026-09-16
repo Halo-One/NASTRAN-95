@@ -1,5 +1,7 @@
       SUBROUTINE PEXIT
 C
+C HALO: See mis/endsys.f -- LINK collides with a gfortran GNU intrinsic.
+      EXTERNAL        LINK
       INTEGER         HH,SS,DATE(3)
       COMMON /OUTPUT/ LE(17)
       COMMON /MACHIN/ MACH

@@ -49,10 +49,11 @@ C HALO:   through HMSG (the C runtime), not Fortran unit 0: see hoswin.f.
       INCLUDE 'HSTATE.COM'
       CHARACTER*160   LINE
       CHARACTER*640   MSG
-      CHARACTER*5     EXT(4)
+      CHARACTER*5     EXT(5)
       LOGICAL         ENDED, FATAL, THERE, HFATAL
       INTEGER         I, ICODE, ISZ, LS, LO, LP
-      DATA            EXT / '.pch ', '.plt ', '.dic ', '.nptp' /
+      DATA            EXT / '.pch ', '.plt ', '.dic ', '.nptp',
+     &                        '.sof ' /
 C
 C     close every unit: the print file must be complete before it is
 C     read, and Windows will not delete an open file. In stdin/stdout
@@ -71,7 +72,7 @@ C
 C     the optional outputs were named so a deck that wants them gets
 C     them; one this deck did not want is an empty file, so remove it
 C
-      DO 20 I = 1, 4
+      DO 20 I = 1, 5
          THERE = .FALSE.
          ISZ   = -1
          INQUIRE ( FILE = HSTEM(1:LS) // EXT(I), EXIST = THERE,
@@ -79,6 +80,13 @@ C
          IF ( THERE .AND. ISZ .EQ. 0 )
      &      CALL HDELF ( HSTEM(1:LS) // EXT(I) )
 20    CONTINUE
+C
+C     in MSC dialect mode the print file is rewritten into the layout
+C     MSC prints, so that a reader written against MSC output reads
+C     this one. Before the verdict scan: the rewrite keeps every
+C     message line, and the verdict is read from the file that is left.
+C
+      IF ( HASE .EQ. 1 ) CALL HMSCF6 ( HPRTF(1:LP), ICODE )
 C
 C     read the print file back for the verdict
 C
@@ -90,6 +98,10 @@ C
       IF ( HFATAL ( LINE ) ) FATAL = .TRUE.
       GO TO 30
 35    CLOSE ( 98 )
+C HALO: the message itself, and what it means, on the terminal --
+C HALO:   nobody should have to open the print file to learn that a
+C HALO:   grid was missing
+      IF ( FATAL ) CALL HMSCDG ( HPRTF(1:LP), ICODE )
 40    CONTINUE
       ICODE = 0
       IF ( .NOT. ENDED ) ICODE = 2

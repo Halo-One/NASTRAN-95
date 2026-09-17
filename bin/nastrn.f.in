@@ -15,8 +15,14 @@ C
       CHARACTER*5     TMP
 C HALO: for the standalone start-up block below
       CHARACTER*256   DECK, STEM, OUTDIR, TMPBAS, SCRD, DFLOG, DFPCH,
-     &                DFPLT, DFDIC, DFNPT
+     &                DFPLT, DFDIC, DFNPT, DFSOF
       CHARACTER*16    PIDS
+C HALO: the MSC dialect front end: the translated deck, the file its
+C HALO:   messages are copied to, and what it found out about the run.
+      CHARACTER*256   XLAT, MSGF, ARG
+      CHARACTER*32    KEY
+      LOGICAL         ASEMOD
+      INTEGER         IRFASE, NDASE, IA, IEQ, IOFF
       LOGICAL         THERE, ISATTY, CHKPT
 C HALO: a backslash literal, written as CHAR(92). gfortran does not treat a
 C HALO:   backslash as an escape by default, so the obvious spelling is a
@@ -104,14 +110,43 @@ C HALO:   command line this becomes <deck>.log a few lines further down,
 C HALO:   and the punch, plot, dictionary and checkpoint files are named
 C HALO:   after the deck too, so that a deck asking for one gets it; the
 C HALO:   exit handler removes the ones left empty.
+C HALO: which executable this is. One source, two programs: nastran95
+C HALO:   reads the 1970s input NASA wrote it for, nastran95ase reads
+C HALO:   the MSC dialect this repository's decks are written in and
+C HALO:   prints its results in MSC's layout. Everything between the
+C HALO:   two is the same solver on the same arithmetic.
+      ASEMOD = @NASTRAN_ASE_MODE@
+      HASE   = 0
+      IF ( ASEMOD ) HASE = 1
       DFLOG  = 'nastran.log'
       DFPCH  = 'none'
       DFPLT  = 'none'
       DFDIC  = 'none'
       DFNPT  = 'none'
+C HALO: the substructure operating file. Its default cannot be 'none'
+C HALO:   like the others: a name of 'none' is a signal to the file
+C HALO:   allocator (GNFIAT skips DSNAMES entries spelled that way) but
+C HALO:   NOT to SOFINT, which opens whatever string it is given. With
+C HALO:   both the checkpoint tape and SOF 1 defaulted to 'none' the two
+C HALO:   land on one file in the working directory, and a substructuring
+C HALO:   deck reads the checkpoint header as its SOF header and stops
+C HALO:   with UFM 6206, WRONG PASSWORD ON SOF FILE. Named after the deck
+C HALO:   they cannot collide, and the exit handler removes it unused.
+      DFSOF  = 'none'
       NARG   = IARGC()
       DECK   = ' '
       IF ( NARG .GE. 1 ) CALL GETARG ( 1, DECK )
+C HALO: --cosmic: read the deck as it is, whichever executable this is.
+C HALO:   The SOL 200 driver runs each of its analyses this way, on a
+C HALO:   deck it has already translated.
+      IOFF = 0
+      IF ( DECK .EQ. '--cosmic' ) THEN
+         ASEMOD = .FALSE.
+         HASE   = 0
+         IOFF   = 1
+         DECK   = ' '
+         IF ( NARG .GE. 2 ) CALL GETARG ( 2, DECK )
+      ENDIF
       IF ( DECK .EQ. '--version' .OR. DECK .EQ. '-v' ) THEN
          CALL HVERS
          CALL EXIT ( 0 )
@@ -161,7 +196,35 @@ C HALO: the output names live in CHARACTER*72s: <stem>.nptp must fit
       CALL EXIT ( 1 )
 46    CONTINUE
       OUTDIR = ' '
-      IF ( NARG .GE. 2 ) CALL GETARG ( 2, OUTDIR )
+C HALO: the rest of the command line. A bare argument is the output
+C HALO:   directory, which is this solver's own contract. Anything with
+C HALO:   an '=' in it is one of MSC's launcher keywords: the scripts in
+C HALO:   this repository call the solver as
+C HALO:
+C HALO:     nastran deck.dat scr=yes bat=no old=no append=no out=DIR
+C HALO:
+C HALO:   and refusing those would mean editing every one of them. out=
+C HALO:   is honoured; the others name things this solver does not have
+C HALO:   (a database to keep, a batch queue to submit to) or already
+C HALO:   does (a scratch directory it makes and removes), and each is
+C HALO:   named on the way past rather than ignored silently.
+      DO 462 IA = 2 + IOFF, NARG
+         CALL GETARG ( IA, ARG )
+         IF ( ARG .EQ. ' ' ) GO TO 462
+         IEQ = INDEX ( ARG, '=' )
+         IF ( IEQ .EQ. 0 ) THEN
+            IF ( OUTDIR .EQ. ' ' ) OUTDIR = ARG
+            GO TO 462
+         ENDIF
+         KEY = ARG(1:IEQ-1)
+         CALL HUPPER ( KEY )
+         IF ( KEY .EQ. 'OUT' ) THEN
+            OUTDIR = ARG(IEQ+1:)
+         ELSE
+            WRITE (0,'(A,A,A)') 'nastran: ', ARG(1:LEN_TRIM(ARG)),
+     &         ' is an MSC launcher keyword; accepted and ignored'
+         ENDIF
+462   CONTINUE
       IF ( OUTDIR .EQ. ' ' .AND. KS .GT. 1 ) OUTDIR = DECK(1:KS-1)
       IF ( OUTDIR .EQ. ' ' .AND. KS .EQ. 1 ) OUTDIR = DECK(1:1)
       LO = LEN_TRIM ( OUTDIR )
@@ -173,6 +236,39 @@ C HALO:   its root is what was meant
             LO = LO + 1
          ENDIF
       ENDIF
+C HALO: ---------- the MSC dialect front end ---------------------------
+C HALO:   nastran95ase reads the deck MSC would read and rewrites it in
+C HALO:   the input this solver was written for. The rewritten deck is
+C HALO:   left beside the print file, and everything the translation
+C HALO:   decided is in <stem>_xlat.txt as well as on the terminal: a
+C HALO:   translation nobody can read is a translation nobody can check.
+      IF ( .NOT. ASEMOD ) GO TO 465
+      IF ( LO .GT. 0 ) THEN
+         CALL HMKDIR ( OUTDIR(1:LO), IERR )
+         XLAT = OUTDIR(1:LO) // BSLASH // STEM(1:LS) // '_n95.dat'
+         MSGF = OUTDIR(1:LO) // BSLASH // STEM(1:LS) // '_xlat.txt'
+      ELSE
+         XLAT = STEM(1:LS) // '_n95.dat'
+         MSGF = STEM(1:LS) // '_xlat.txt'
+      ENDIF
+      CALL HMSCXL ( DECK(1:LD), XLAT, MSGF, IRFASE, NDASE, IERR )
+      IF ( IERR .EQ. 0 ) GO TO 464
+C HALO: SOL 200 never comes back: the driver runs the analyses as
+C HALO:   child processes and exits with their verdict
+      IF ( IERR .EQ. 200 ) THEN
+         IF ( LO .GT. 0 ) THEN
+            CALL HMSCOP ( DECK(1:LD), OUTDIR(1:LO), STEM(1:LS), IERR )
+         ELSE
+            CALL HMSCOP ( DECK(1:LD), '.', STEM(1:LS), IERR )
+         ENDIF
+         CALL EXIT ( IERR )
+      ENDIF
+      WRITE (0,'(A,A)') 'nastran: the deck was not translated and ',
+     &   'nothing was solved.'
+      CALL EXIT ( 3 )
+464   DECK = XLAT
+      LD   = LEN_TRIM ( DECK )
+465   CONTINUE
 C HALO: the deck is opened before the change of directory, because its
 C HALO:   path may be relative to where the user is
       OPEN ( 5, FILE = DECK(1:LD), STATUS = 'OLD', IOSTAT = IOS )
@@ -215,6 +311,7 @@ C HALO:   and only ever sees the stem.
       DFPLT = STEM(1:LS) // '.plt'
       DFDIC = STEM(1:LS) // '.dic'
       IF ( CHKPT ) DFNPT = STEM(1:LS) // '.nptp'
+      DFSOF = STEM(1:LS) // '.sof'
       HPRTF = STEM(1:LS) // '.out'
       HSTEM = STEM(1:LS)
 5     CONTINUE
@@ -289,8 +386,22 @@ C HALO: with everything in place, the print file
 78    HMODE = 1
 80    CONTINUE
 C HALO: memory, and the rest of the file names
-      CALL HDFLTI ( 'OCMEM',  2000000, IOCMEM )
-      CALL HDFLTI ( 'DBMEM', 12000000, IDBLEN )
+C HALO: the split of open core between the modules and the in-memory
+C HALO:   database. NASA divided it 2,000,000 / 12,000,000, which suits
+C HALO:   the decks of the day: small models, many data blocks. A modal
+C HALO:   run on a few thousand grids is the other way round -- FEER
+C HALO:   wants working space and the database sits at a sixth full --
+C HALO:   and running out of it stops the job inside the decomposition
+C HALO:   rather than saying what was short. So nastran95ase gives the
+C HALO:   modules three quarters of it. Either can still be set in the
+C HALO:   environment, which is what the message below reports.
+      IF ( ASEMOD ) THEN
+         CALL HDFLTI ( 'OCMEM', (LENOPC/4)*3, IOCMEM )
+         CALL HDFLTI ( 'DBMEM', LENOPC/4,     IDBLEN )
+      ELSE
+         CALL HDFLTI ( 'OCMEM',  2000000, IOCMEM )
+         CALL HDFLTI ( 'DBMEM', 12000000, IDBLEN )
+      ENDIF
       IF ( IOCMEM .LE. LENOPC ) GO TO 10
       PRINT *,' LARGEST VALUE FOR OPEN CORE ALLOWED IS:',LENOPC
       CALL MESAGE ( -61, 0, 0 )
@@ -346,7 +457,7 @@ C HALO: memory, and the rest of the file names
       DSNAMES(4) = DIC
       CALL HDFLTC ( 'PUNCHNM', DFPCH, PUNCH )
       DSNAMES(1) = PUNCH
-      CALL HDFLTC ( 'SOF1', 'none', VALUE )
+      CALL HDFLTC ( 'SOF1', DFSOF, VALUE )
       SDSN(1) = VALUE
       CALL HDFLTC ( 'SOF2', 'none', VALUE )
       SDSN(2) = VALUE

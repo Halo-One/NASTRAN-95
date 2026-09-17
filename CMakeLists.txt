@@ -20,7 +20,7 @@
 #           earned it.
 # ---------------------------------------------------------------------------
 cmake_minimum_required(VERSION 3.20)
-project(NASTRAN95 Fortran)
+project(NASTRAN95 Fortran C)
 
 # Do not run the C preprocessor over this source. Nothing in the tree uses it
 # -- the INCLUDE statements are Fortran INCLUDE, not #include -- and running it
@@ -115,6 +115,16 @@ else()
   list(REMOVE_ITEM MDS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/mds/hoswin.f")
 endif()
 
+# --- the MSC dialect front end ----------------------------------------------
+# msc/ is new in this fork and is not NASA's. It reads the deck MSC Nastran
+# would read -- free field, nested INCLUDEs, SOL 103, RBE2, CBUSH, EIGRL --
+# and rewrites it as the input this solver was written for, then rewrites the
+# print file into the layout MSC prints. It is C because it is string
+# handling and lookup tables, and because a CHARACTER in fixed-form Fortran
+# is a blank-padded fixed-length thing that fights every line of it.
+file(GLOB MSC_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/msc/*.c")
+set_source_files_properties(${MSC_SOURCES} PROPERTIES LANGUAGE C)
+
 # The main program is generated so open core can be a build option. The
 # template is bin/nastrn.f.in; @NASTRAN_OPEN_CORE_WORDS@ appears twice in it,
 # once in the COMMON declaration and once in LENOPC, and they must agree.
@@ -133,8 +143,16 @@ endif()
 if(NASTRAN_BUILD_ID MATCHES "'")
   message(FATAL_ERROR "NASTRAN_BUILD_ID may not contain an apostrophe")
 endif()
+# @NASTRAN_ASE_MODE@ is the other: one template, two main programs. The
+# plain one reads the input NASA wrote the solver for; the ASE one reads the
+# MSC dialect. Same solver, same arithmetic, different front door.
+set(NASTRAN_ASE_MODE ".FALSE.")
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/bin/nastrn.f.in"
                "${CMAKE_CURRENT_BINARY_DIR}/nastrn.f" @ONLY)
+set(NASTRAN_ASE_MODE ".TRUE.")
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/bin/nastrn.f.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/nastrnase.f" @ONLY)
+set(NASTRAN_ASE_MODE ".FALSE.")
 
 # --- the rigid format library, compiled in ----------------------------------
 # NASTRAN reads its rigid formats (rf/, the DMAP for every solution sequence)
@@ -165,8 +183,11 @@ include_directories("${CMAKE_CURRENT_SOURCE_DIR}/mds"
 # PEXIT, which everything reaches) references HRFDEL, so any executable that
 # links nas needs it, ff included.
 add_library(nas STATIC ${MIS_SOURCES} ${MDS_SOURCES} ${BD_SOURCES}
-                       "${HRFLIB_F}")
-target_compile_options(nas PRIVATE ${NASTRAN_FLAGS})
+                       ${MSC_SOURCES} "${HRFLIB_F}")
+target_compile_options(nas PRIVATE $<$<COMPILE_LANGUAGE:Fortran>:${NASTRAN_FLAGS}>)
+# The C is written to C89 so that it builds with whatever is to hand in ten
+# years' time, and warnings in it are read, not silenced like the Fortran's.
+target_compile_options(nas PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra>)
 
 # bd/semdbd.f is NOT excluded, although the upstream CMake build excludes it.
 # It is the only BLOCK DATA in the tree that initialises /XMSSG/ (the "0***
@@ -182,6 +203,12 @@ add_executable(nastran "${CMAKE_CURRENT_BINARY_DIR}/nastrn.f" ${BD_SOURCES})
 target_compile_options(nastran PRIVATE ${NASTRAN_FLAGS})
 target_link_libraries(nastran PRIVATE nas)
 
+# nastran95ase: the same solver reading the MSC dialect.
+add_executable(nastranase "${CMAKE_CURRENT_BINARY_DIR}/nastrnase.f" ${BD_SOURCES})
+target_compile_options(nastranase PRIVATE ${NASTRAN_FLAGS})
+target_link_libraries(nastranase PRIVATE nas)
+set_target_properties(nastranase PROPERTIES OUTPUT_NAME "nastran95ase")
+
 add_executable(nasthelp "${CMAKE_CURRENT_SOURCE_DIR}/um/nasthelp.f")
 target_compile_options(nasthelp PRIVATE ${NASTRAN_FLAGS})
 
@@ -195,7 +222,7 @@ target_link_libraries(ff PRIVATE nas)
 add_executable(chkfil "${CMAKE_CURRENT_SOURCE_DIR}/mds/chkfil.f")
 target_compile_options(chkfil PRIVATE ${NASTRAN_FLAGS})
 
-set_target_properties(nastran nasthelp nastplot ff chkfil PROPERTIES
+set_target_properties(nastran nastranase nasthelp nastplot ff chkfil PROPERTIES
                       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 # --- standalone executables -------------------------------------------------
@@ -219,10 +246,10 @@ set_target_properties(nastran nasthelp nastplot ff chkfil PROPERTIES
 option(NASTRAN_STATIC_RUNTIME
        "Link libgfortran/libgcc statically so the executables stand alone" ON)
 if(NASTRAN_STATIC_RUNTIME AND CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-  foreach(target nastran nasthelp nastplot ff chkfil hrfgen)
+  foreach(target nastran nastranase nasthelp nastplot ff chkfil hrfgen)
     target_link_options(${target} PRIVATE
                         -static -static-libgfortran -static-libgcc)
   endforeach()
 endif()
 
-install(TARGETS nastran nasthelp nastplot ff chkfil RUNTIME DESTINATION bin)
+install(TARGETS nastran nastranase nasthelp nastplot ff chkfil RUNTIME DESTINATION bin)

@@ -106,12 +106,54 @@ file(GLOB BD_SOURCES  CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/bd/*.f")
 list(REMOVE_ITEM MDS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/mds/nastrn.f")
 # chkfil is its own standalone program, built separately below.
 list(REMOVE_ITEM MDS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/mds/chkfil.f")
+# mds/hoswin.f and mds/hosunx.f are the same four operating-system calls
+# (make, remove and enter a directory; where TEMP is) against the Windows
+# and the POSIX names of the C runtime. One of them is compiled.
+if(WIN32)
+  list(REMOVE_ITEM MDS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/mds/hosunx.f")
+else()
+  list(REMOVE_ITEM MDS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/mds/hoswin.f")
+endif()
 
 # The main program is generated so open core can be a build option. The
 # template is bin/nastrn.f.in; @NASTRAN_OPEN_CORE_WORDS@ appears twice in it,
 # once in the COMMON declaration and once in LENOPC, and they must agree.
+#
+# NASTRAN_BUILD_ID is the other substitution: one short line saying which
+# build this is, printed by `nastran --version` and at the top of the usage
+# text. Whoever builds a distributable sets it (commit, compiler, date);
+# blank means nobody did. It goes into a character constant on a fixed-form
+# line, hence the length limit.
+set(NASTRAN_BUILD_ID "" CACHE STRING
+    "Short build identification printed by `nastran --version`")
+string(LENGTH "${NASTRAN_BUILD_ID}" _build_id_length)
+if(_build_id_length GREATER 56)
+  message(FATAL_ERROR "NASTRAN_BUILD_ID must be 56 characters or fewer")
+endif()
+if(NASTRAN_BUILD_ID MATCHES "'")
+  message(FATAL_ERROR "NASTRAN_BUILD_ID may not contain an apostrophe")
+endif()
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/bin/nastrn.f.in"
                "${CMAKE_CURRENT_BINARY_DIR}/nastrn.f" @ONLY)
+
+# --- the rigid format library, compiled in ----------------------------------
+# NASTRAN reads its rigid formats (rf/, the DMAP for every solution sequence)
+# at run time from the directory named RFDIR. Rather than ship rf/ beside
+# the executable and hope it is found, utility/hrfgen.f turns every file in
+# rf/ into Fortran WRITE statements at build time, and the main program
+# writes the library into its scratch directory at start-up (unless RFDIR
+# is set, which still wins). Nothing about how RFOPEN reads them changes.
+file(GLOB RF_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/rf/*")
+list(SORT RF_FILES)
+add_executable(hrfgen "${CMAKE_CURRENT_SOURCE_DIR}/utility/hrfgen.f")
+target_compile_options(hrfgen PRIVATE ${NASTRAN_FLAGS})
+set(HRFLIB_F "${CMAKE_CURRENT_BINARY_DIR}/hrflib.f")
+add_custom_command(
+  OUTPUT  "${HRFLIB_F}"
+  COMMAND hrfgen "${HRFLIB_F}" ${RF_FILES}
+  DEPENDS hrfgen ${RF_FILES}
+  COMMENT "Generating hrflib.f from rf/"
+  VERBATIM)
 
 # INCLUDE 'DSIOF.COM' and friends resolve relative to the including file for
 # the tree's own sources, but the generated main program lives in the build
@@ -119,7 +161,11 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/bin/nastrn.f.in"
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/mds"
                     "${CMAKE_CURRENT_SOURCE_DIR}/mis")
 
-add_library(nas STATIC ${MIS_SOURCES} ${MDS_SOURCES} ${BD_SOURCES})
+# hrflib.f goes into the library, not just into nastran: HCLEAN (called from
+# PEXIT, which everything reaches) references HRFDEL, so any executable that
+# links nas needs it, ff included.
+add_library(nas STATIC ${MIS_SOURCES} ${MDS_SOURCES} ${BD_SOURCES}
+                       "${HRFLIB_F}")
 target_compile_options(nas PRIVATE ${NASTRAN_FLAGS})
 
 # bd/semdbd.f is NOT excluded, although the upstream CMake build excludes it.
@@ -173,7 +219,7 @@ set_target_properties(nastran nasthelp nastplot ff chkfil PROPERTIES
 option(NASTRAN_STATIC_RUNTIME
        "Link libgfortran/libgcc statically so the executables stand alone" ON)
 if(NASTRAN_STATIC_RUNTIME AND CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-  foreach(target nastran nasthelp nastplot ff chkfil)
+  foreach(target nastran nasthelp nastplot ff chkfil hrfgen)
     target_link_options(${target} PRIVATE
                         -static -static-libgfortran -static-libgcc)
   endforeach()

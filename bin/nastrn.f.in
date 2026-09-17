@@ -9,20 +9,22 @@ C HALO:   Set it with -DNASTRAN_OPEN_CORE_WORDS=<words> at configure time.
 C HALO:
 C HALO:   mds/nastrn.f is a duplicate of the original of this file and is
 C HALO:   excluded from the build; do not edit it expecting an effect.
-      PROGRAM NASTRN        
-C        
+      PROGRAM NASTRN
+C
       CHARACTER*80    VALUE
       CHARACTER*5     TMP
 C HALO: for the standalone start-up block below
-      CHARACTER*256   ARGV, EXEPTH, DECK, STEM, RFTRY, DFLOG
-      LOGICAL         THERE, ISATTY
+      CHARACTER*256   DECK, STEM, OUTDIR, TMPBAS, SCRD, DFLOG, DFPCH,
+     &                DFPLT, DFDIC, DFNPT
+      CHARACTER*16    PIDS
+      LOGICAL         THERE, ISATTY, CHKPT
 C HALO: a backslash literal, written as CHAR(92). gfortran does not treat a
 C HALO:   backslash as an escape by default, so the obvious spelling is a
 C HALO:   TWO character string that can never equal one character -- and
-C HALO:   every path on Windows is spelled with backslashes, so the
-C HALO:   directory scan below silently found no separator at all.
+C HALO:   every path on Windows is spelled with backslashes, so a
+C HALO:   directory scan written that way silently finds no separator.
       CHARACTER*1     BSLASH
-      INTEGER         NARG, LD, LS, LE, K
+      INTEGER         NARG, LD, LS, LO, LT, LP, K, KS, IERR, IPID, IOS
       INTEGER         SPERLK
       REAL            SYSTM(94)
       COMMON / LSTADD / LASTAD
@@ -36,18 +38,19 @@ C HALO:   directory scan below silently found no separator at all.
      &,                 MAXBLK, MAXDSK, IDBLEN, IDBADR, IBASBF, INDDIR
      &,                 NUMOPN, NUMCLS, NUMWRI, NUMREA, LENOPC
       INCLUDE 'NASNAMES.COM'
+      INCLUDE 'HSTATE.COM'
       CHARACTER*80    SDSN
       EQUIVALENCE    ( ISYSTM, SYSTM )
       LENOPC = @NASTRAN_OPEN_CORE_WORDS@
-C        
-C     SAVE STARTING CPU TIME AND WALL CLOCK TIME IN /SYSTEM/        
-C      
+C
+C     SAVE STARTING CPU TIME AND WALL CLOCK TIME IN /SYSTEM/
+C
       ISYSTM(18) = 0
-      CALL SECOND (SYSTM(18))        
-      CALL WALTIM (ISYSTM(32))        
-C        
+      CALL SECOND (SYSTM(18))
+      CALL WALTIM (ISYSTM(32))
+C
 C     EXECUTE NASTRAN SUPER LINK
-C        
+C
       LEN = 80
       VALUE = ' '
       CALL BTSTRP
@@ -55,141 +58,253 @@ C
 C HALO: ---------- standalone start-up -------------------------------------
 C HALO:
 C HALO:   NASA's nastran.exe reads the deck from stdin, writes the print file
-C HALO:   to stdout, and takes the name of every other file it touches from an
-C HALO:   environment variable -- about twenty-five of them, with no defaults.
-C HALO:   An unset DBMEM is not a default, it is an end-of-file on an integer
-C HALO:   READ. That is workable when a wrapper sets everything up, and
-C HALO:   useless when someone wants to call the solver from their own
-C HALO:   workflow, or simply double-clicks it.
+C HALO:   to stdout, takes the name of every other file it touches from an
+C HALO:   environment variable -- about twenty-five of them, with no
+C HALO:   defaults; an unset DBMEM is not a default, it is an end-of-file on
+C HALO:   an integer READ -- reads its rigid format library from a
+C HALO:   directory named in another one, and leaves its scratch files
+C HALO:   wherever it was told to put them. That is workable when a wrapper
+C HALO:   script sets everything up, and useless when someone wants to call
+C HALO:   the solver from their own workflow, copies the executable to
+C HALO:   another machine, or simply double-clicks it.
 C HALO:
-C HALO:   So: if a file name is given on the command line, run that deck and
-C HALO:   write <deck>.out beside it, and give every environment variable a
-C HALO:   sensible default when it is not set. Nothing here changes a run
-C HALO:   where the variables ARE set -- each default only applies to a blank
-C HALO:   -- so the Python runner is unaffected.
+C HALO:   So, in this order:
 C HALO:
-C HALO:       nastran.exe wing.inp
+C HALO:     * a deck named on the command line is opened on unit 5, and
+C HALO:       <deck>.out on unit 6, beside the deck or in the directory
+C HALO:       given as the second argument. No argument and a terminal on
+C HALO:       stdin prints usage instead of waiting silently for a deck;
+C HALO:       no argument and a pipe is NASA's original contract, unchanged
+C HALO:     * the scratch directory is a fresh one under TEMP (mds/hoswin.f
+C HALO:       decides where), unless DIRCTY names one
+C HALO:     * the rigid format library is written into it from the copy
+C HALO:       compiled into this executable (hrflib.f, generated at build
+C HALO:       time from rf/), unless RFDIR names a directory
+C HALO:     * every other environment variable gets a default, each
+C HALO:       applying only to a blank, so a caller that sets them is
+C HALO:       unaffected
+C HALO:     * the exit handler in mds/hexit.f is registered, and removes
+C HALO:       the scratch directory and sets the exit code on every way out
 C HALO:
-      NARG  = IARGC()
-      DECK  = ' '
+C HALO:       nastran wing.inp              -> wing.out, wing.log beside it
+C HALO:       nastran wing.inp C:\runs      -> in C:\runs
+C HALO:
+      HMODE  = 0
+      HDIRMK = 0
+      HRFMK  = 0
+      HPRTF  = ' '
+      HSTEM  = ' '
+      HOUTD  = ' '
+      BSLASH = CHAR(92)
 C HALO: the run log defaults to a real file, not to 'none'. Unit 3 is only
 C HALO:   OPENed when its name is not 'none', and NASTRAN writes to it
 C HALO:   regardless -- so leaving it unset makes gfortran invent a file
 C HALO:   called fort.3 in the working directory. With a deck named on the
-C HALO:   command line this becomes <deck>.log a few lines further down.
+C HALO:   command line this becomes <deck>.log a few lines further down,
+C HALO:   and the punch, plot, dictionary and checkpoint files are named
+C HALO:   after the deck too, so that a deck asking for one gets it; the
+C HALO:   exit handler removes the ones left empty.
       DFLOG  = 'nastran.log'
-      BSLASH = CHAR(92)
+      DFPCH  = 'none'
+      DFPLT  = 'none'
+      DFDIC  = 'none'
+      DFNPT  = 'none'
+      NARG   = IARGC()
+      DECK   = ' '
       IF ( NARG .GE. 1 ) CALL GETARG ( 1, DECK )
-      IF ( DECK .NE. ' ' ) GO TO 4
-C HALO: No deck named. Reading it from standard input is the original
-C HALO:   behaviour and still works, so only complain when standard input is
-C HALO:   a terminal -- which is what a double-click looks like, and which
-C HALO:   otherwise leaves the solver sitting there apparently doing nothing
-C HALO:   while it waits for someone to type a bulk data deck.
-      IF ( .NOT. ISATTY(5) ) GO TO 5
-      WRITE (0,*) 'NASTRAN-95'
-      WRITE (0,*) ' '
-      WRITE (0,*) 'Usage:  nastran deck.inp'
-      WRITE (0,*) '        nastran < deck.inp > deck.out'
-      WRITE (0,*) ' '
-      WRITE (0,*) 'Writes <deck>.out and <deck>.log beside the deck.'
-      WRITE (0,*) 'See README.txt for the settings.'
-      STOP
-4     CONTINUE
-C HALO: strip a .inp/.dat/.bdf suffix to get the stem for the output names
-      LD   = INDEX ( DECK, ' ' ) - 1
-      IF ( LD .LE. 0 ) LD = LEN_TRIM ( DECK )
-      STEM = DECK(1:LD)
-      LS   = LD
-      DO 2 K = LD, 2, -1
-         IF ( DECK(K:K) .EQ. '/' .OR. DECK(K:K) .EQ. BSLASH )
-     &      GO TO 3
-         IF ( DECK(K:K) .EQ. '.' ) THEN
-            STEM = DECK(1:K-1)
-            LS   = K - 1
-            GO TO 3
-         ENDIF
-2     CONTINUE
-3     CONTINUE
-      INQUIRE ( FILE = DECK(1:LD), EXIST = THERE )
-      IF ( .NOT. THERE ) THEN
-         WRITE (0,*) 'NASTRAN: cannot find input deck ', DECK(1:LD)
-         STOP
+      IF ( DECK .EQ. '--version' .OR. DECK .EQ. '-v' ) THEN
+         CALL HVERS
+         CALL EXIT ( 0 )
       ENDIF
-      OPEN ( 5, FILE = DECK(1:LD),        STATUS = 'OLD' )
-      OPEN ( 6, FILE = STEM(1:LS)//'.out', STATUS = 'UNKNOWN' )
-      WRITE (0,*) 'NASTRAN: ', DECK(1:LD), ' -> ', STEM(1:LS)//'.out'
-      DFLOG = STEM(1:LS)//'.log'
-5     CONTINUE
-C HALO: RFDIR holds the rigid format library and is read at run time, so the
-C HALO:   solver has to be told where it is. Look next to the executable
-C HALO:   first, then one directory up, then in a sibling solver/rf -- which
-C HALO:   covers both a deployed copy and a working build tree. NASINFO is
-C HALO:   the marker file; it only ever lives in rf/.
-      CALL GETENV ( 'RFDIR', VALUE )
-      IF ( VALUE .NE. ' ' ) GO TO 9
-      CALL GETARG ( 0, EXEPTH )
-      LE = LEN_TRIM ( EXEPTH )
-      DO 6 K = LE, 1, -1
-         IF ( EXEPTH(K:K) .EQ. '/' .OR. EXEPTH(K:K) .EQ. BSLASH )
-     &      GO TO 7
-6     CONTINUE
-C HALO: no separator at all means the program was found on PATH, so argument
-C HALO:   zero is a bare name and there is no directory in it to use. Look in
-C HALO:   the current directory instead of in EXEPTH(1:1), which would be the
-C HALO:   first letter of the program's own name.
-      EXEPTH = '.'
-      K      = 2
-7     LE = K - 1
-      IF ( LE .LT. 1 ) LE = 1
-      DO 8 K = 1, 3
-         IF ( K .EQ. 1 ) RFTRY = EXEPTH(1:LE)//'/rf'
-         IF ( K .EQ. 2 ) RFTRY = EXEPTH(1:LE)//'/../rf'
-         IF ( K .EQ. 3 ) RFTRY = EXEPTH(1:LE)//'/../solver/rf'
-         INQUIRE ( FILE = RFTRY(1:LEN_TRIM(RFTRY))//'/NASINFO',
-     &             EXIST = THERE )
-         IF ( THERE ) THEN
-            VALUE = RFTRY
-            GO TO 9
+      IF ( DECK .EQ. '--help' .OR. DECK .EQ. '-h' .OR.
+     &     DECK .EQ. '/?' ) THEN
+         CALL HUSAGE
+         CALL EXIT ( 0 )
+      ENDIF
+      IF ( DECK .NE. ' ' ) GO TO 4
+C HALO: no deck named. Reading it from standard input is the original
+C HALO:   behaviour and still works, so only complain when standard input
+C HALO:   is a terminal -- which is what a double-click looks like, and
+C HALO:   which otherwise leaves the solver sitting there apparently doing
+C HALO:   nothing while it waits for someone to type a bulk data deck.
+      IF ( .NOT. ISATTY(5) ) GO TO 5
+      CALL HUSAGE
+      CALL EXIT ( 1 )
+4     CONTINUE
+      LD = LEN_TRIM ( DECK )
+      INQUIRE ( FILE = DECK(1:LD), EXIST = THERE )
+      IF ( THERE ) GO TO 41
+      WRITE (0,'(A,A)') 'nastran: deck not found: ', DECK(1:LD)
+      CALL EXIT ( 1 )
+41    CONTINUE
+C HALO: the deck's directory, and its name without the extension
+      KS = 0
+      DO 42 K = LD, 1, -1
+         IF ( DECK(K:K) .EQ. '/' .OR. DECK(K:K) .EQ. BSLASH ) THEN
+            KS = K
+            GO TO 43
          ENDIF
-8     CONTINUE
-      WRITE (0,*) 'NASTRAN: cannot find the rigid format library.'
-      WRITE (0,*) '  Looked beside ', EXEPTH(1:LE)
-      WRITE (0,*) '  Set RFDIR to the directory holding NASINFO.'
-9     CONTINUE
-C HALO: RFDIR lives in a CHARACTER*72 and Fortran truncates silently, so a
-C HALO:   deep install directory does not fail at the assignment -- it fails
+42    CONTINUE
+43    STEM = DECK(KS+1:LD)
+      LS   = LD - KS
+      DO 44 K = LS, 2, -1
+         IF ( STEM(K:K) .EQ. '.' ) THEN
+            LS = K - 1
+            GO TO 45
+         ENDIF
+44    CONTINUE
+45    CONTINUE
+C HALO: the output names live in CHARACTER*72s: <stem>.nptp must fit
+      IF ( LS .LE. 60 ) GO TO 46
+      WRITE (0,'(A,A,A)') 'nastran: deck name too long, keep it ',
+     &   'under 60 characters: ', STEM(1:LS)
+      CALL EXIT ( 1 )
+46    CONTINUE
+      OUTDIR = ' '
+      IF ( NARG .GE. 2 ) CALL GETARG ( 2, OUTDIR )
+      IF ( OUTDIR .EQ. ' ' .AND. KS .GT. 1 ) OUTDIR = DECK(1:KS-1)
+      IF ( OUTDIR .EQ. ' ' .AND. KS .EQ. 1 ) OUTDIR = DECK(1:1)
+      LO = LEN_TRIM ( OUTDIR )
+C HALO: a bare drive letter is that drive's current directory to C;
+C HALO:   its root is what was meant
+      IF ( LO .GT. 0 ) THEN
+         IF ( OUTDIR(LO:LO) .EQ. ':' ) THEN
+            OUTDIR(LO+1:LO+1) = BSLASH
+            LO = LO + 1
+         ENDIF
+      ENDIF
+C HALO: the deck is opened before the change of directory, because its
+C HALO:   path may be relative to where the user is
+      OPEN ( 5, FILE = DECK(1:LD), STATUS = 'OLD', IOSTAT = IOS )
+      IF ( IOS .EQ. 0 ) GO TO 47
+      WRITE (0,'(A,A)') 'nastran: cannot open deck ', DECK(1:LD)
+      CALL EXIT ( 1 )
+47    CONTINUE
+C HALO: the checkpoint tape. NASTRAN opens and writes the New Problem
+C HALO:   Tape on every run, so naming it unconditionally leaves a 16 KB
+C HALO:   file beside every print file; it only means something when the
+C HALO:   executive control says CHKPNT YES. Look, then rewind.
+      CHKPT = .FALSE.
+      DO 471 K = 1, 200
+         READ ( 5, '(A)', END = 472, ERR = 472 ) VALUE
+         CALL HUPPER ( VALUE )
+         IF ( VALUE(1:4) .EQ. 'CEND' ) GO TO 472
+         IF ( VALUE(1:6) .EQ. 'CHKPNT' .AND.
+     &        INDEX ( VALUE, 'YES' ) .GT. 0 ) CHKPT = .TRUE.
+471   CONTINUE
+472   REWIND 5
+C HALO: the outputs are written by RELATIVE name from inside the output
+C HALO:   directory. The solver keeps each name in a CHARACTER*72, and an
+C HALO:   absolute path on a modern Windows box is often longer than that;
+C HALO:   Fortran truncates it silently and then fails opening the
+C HALO:   truncated string. So the solver runs from inside the directory
+C HALO:   and only ever sees the stem.
+      IF ( LO .EQ. 0 ) GO TO 49
+      CALL HMKDIR ( OUTDIR(1:LO), IERR )
+      CALL HCHDIR ( OUTDIR(1:LO), IERR )
+      IF ( IERR .EQ. 0 ) GO TO 48
+      WRITE (0,'(A,A)') 'nastran: cannot use output directory ',
+     &   OUTDIR(1:LO)
+      CALL EXIT ( 1 )
+48    HOUTD = OUTDIR(1:LO)
+      IF ( OUTDIR(LO:LO) .NE. BSLASH .AND. OUTDIR(LO:LO) .NE. '/' )
+     &   HOUTD(LO+1:LO+1) = BSLASH
+49    CONTINUE
+      DFLOG = STEM(1:LS) // '.log'
+      DFPCH = STEM(1:LS) // '.pch'
+      DFPLT = STEM(1:LS) // '.plt'
+      DFDIC = STEM(1:LS) // '.dic'
+      IF ( CHKPT ) DFNPT = STEM(1:LS) // '.nptp'
+      HPRTF = STEM(1:LS) // '.out'
+      HSTEM = STEM(1:LS)
+5     CONTINUE
+C HALO: from here on the exit handler tidies up whatever gets created
+      CALL HATREG
+C HALO: the scratch directory: DIRCTY if set, else a fresh one under
+C HALO:   TEMP named after this process, so that two runs at once cannot
+C HALO:   hand each other their scr files. A leftover from a crashed run
+C HALO:   of the same process id is skipped, not reused: scr files are
+C HALO:   opened with STATUS=UNKNOWN and would be read.
+      CALL HDFLTC ( 'DIRCTY', ' ', DIRTRY )
+      IF ( DIRTRY .NE. ' ' ) GO TO 60
+      CALL HTMPDR ( TMPBAS )
+      LT = LEN_TRIM ( TMPBAS )
+      CALL HMKDIR ( TMPBAS(1:LT), IERR )
+      IPID = GETPID()
+      WRITE ( PIDS, '(I0)' ) IPID
+      LP = LEN_TRIM ( PIDS )
+      DO 52 K = 0, 99
+         SCRD = TMPBAS(1:LT) // '/n95_' // PIDS(1:LP)
+         IF ( K .GT. 0 ) WRITE ( SCRD(LT+LP+6:), '(A,I0)' ) '_', K
+         CALL HMKDIR ( SCRD(1:LEN_TRIM(SCRD)), IERR )
+         IF ( IERR .EQ. 0 ) GO TO 54
+52    CONTINUE
+      WRITE (0,'(A,A,A)') 'nastran: cannot create a scratch ',
+     &   'directory under ', TMPBAS(1:LT)
+      CALL EXIT ( 1 )
+54    DIRTRY = SCRD
+      HDIRMK = 1
+60    CONTINUE
+C HALO: DIRTRY is a CHARACTER*72 holding a path that gets '/scr90'
+C HALO:   appended; say so rather than truncate silently
+      IF ( LEN_TRIM ( DIRTRY ) .LE. 66 ) GO TO 62
+      WRITE (0,'(A,A)') 'nastran: the scratch directory path is too ',
+     &   'long for NASTRAN (66 characters at most):'
+      WRITE (0,'(A,A)') '  ', DIRTRY
+      CALL EXIT ( 1 )
+62    CONTINUE
+C HALO: the rigid format library. RFDIR from the environment wins, for
+C HALO:   anyone working on the DMAP; otherwise the copy built into this
+C HALO:   executable is written into the scratch directory and read from
+C HALO:   there. RFOPEN takes RFDIR from /DOSNAM/, so this is the one
+C HALO:   place it is decided.
+      CALL HDFLTC ( 'RFDIR', ' ', VALUE )
+      IF ( VALUE .NE. ' ' ) GO TO 70
+      CALL HRFLIB ( DIRTRY(1:LEN_TRIM(DIRTRY)), IERR )
+      IF ( IERR .EQ. 0 ) GO TO 64
+      WRITE (0,'(A,A,A)') 'nastran: cannot write the rigid format ',
+     &   'library into ', DIRTRY(1:LEN_TRIM(DIRTRY))
+      CALL EXIT ( 1 )
+64    HRFMK = 1
+      VALUE = DIRTRY
+70    CONTINUE
+C HALO: RFDIR lives in a CHARACTER*72 and Fortran truncates silently, so
+C HALO:   a deep directory does not fail at the assignment -- it fails
 C HALO:   later, opening '/NASINFO', which looks like a corrupt install
 C HALO:   rather than a long path. Say so here instead.
-      IF ( LEN_TRIM(VALUE) .LE. 72 ) GO TO 95
-      WRITE (0,*) 'NASTRAN: the rigid format directory is too long.'
-      WRITE (0,*) '  NASTRAN stores it in 72 characters and yours is',
-     &            LEN_TRIM(VALUE)
-      WRITE (0,*) '  ', VALUE(1:72)
-      WRITE (0,*) '  Move the installation somewhere shorter.'
-      STOP
-95    RFDIR = VALUE
+      IF ( LEN_TRIM ( VALUE ) .LE. 72 ) GO TO 72
+      WRITE (0,'(A,A)') 'nastran: RFDIR is too long for NASTRAN ',
+     &   '(72 characters at most):'
+      WRITE (0,'(A,A)') '  ', VALUE
+      CALL EXIT ( 1 )
+72    RFDIR = VALUE
+C HALO: with everything in place, the print file
+      IF ( HSTEM .EQ. ' ' ) GO TO 80
+      OPEN ( 6, FILE = HPRTF(1:LEN_TRIM(HPRTF)), STATUS = 'REPLACE',
+     &       IOSTAT = IOS )
+      IF ( IOS .EQ. 0 ) GO TO 78
+      WRITE (0,'(A,A)') 'nastran: cannot write ',
+     &   HPRTF(1:LEN_TRIM(HPRTF))
+      CALL EXIT ( 1 )
+78    HMODE = 1
+80    CONTINUE
 C HALO: memory, and the rest of the file names
       CALL HDFLTI ( 'OCMEM',  2000000, IOCMEM )
       CALL HDFLTI ( 'DBMEM', 12000000, IDBLEN )
       IF ( IOCMEM .LE. LENOPC ) GO TO 10
       PRINT *,' LARGEST VALUE FOR OPEN CORE ALLOWED IS:',LENOPC
       CALL MESAGE ( -61, 0, 0 )
-10    IF ( IDBLEN .NE. 0 ) IDBLEN = LENOPC - IOCMEM 
+10    IF ( IDBLEN .NE. 0 ) IDBLEN = LENOPC - IOCMEM
       LASTAD = LOCFX( IZ( IOCMEM ) )
       IF ( IDBLEN .NE. 0 ) IDBADR = LOCFX( IZ( IOCMEM+1 ) )
       LENOPC = IOCMEM
       CALL DBMINT
       LOUT   = 3
       IRDICT = 4
-      SPERLK = 1        
-      ISYSTM(11) = 1        
+      SPERLK = 1
+      ISYSTM(11) = 1
       VALUE = ' '
-      VALUE = ' '
-C HALO: scratch files land in the current directory unless told
-C HALO:   otherwise. They are deleted again at the end.
-      CALL HDFLTC ( 'DIRCTY', '.', DIRTRY )
-      LEN = INDEX( DIRTRY, ' ' ) - 1
+      LEN = LEN_TRIM ( DIRTRY )
       DO 20 I = 1, 90
       IF ( I .LE. 9 ) WRITE ( TMP, 901 ) I
       IF ( I .GT. 9 ) WRITE ( TMP, 902 ) I
@@ -201,7 +316,7 @@ C HALO:   otherwise. They are deleted again at the end.
       DSNAMES(3) = LOG
       CALL HDFLTC ( 'OPTPNM', 'none', OPTP )
       DSNAMES(7)  = OPTP
-      CALL HDFLTC ( 'NPTPNM', 'none', NPTP )
+      CALL HDFLTC ( 'NPTPNM', DFNPT, NPTP )
       DSNAMES(8)  = NPTP
       CALL HDFLTC ( 'FTN11', 'none', OUT11 )
       DSNAMES(11) = OUT11
@@ -225,12 +340,12 @@ C HALO:   otherwise. They are deleted again at the end.
       DSNAMES(20) = VALUE
       CALL HDFLTC ( 'FTN21', 'none', VALUE )
       DSNAMES(21) = VALUE
-      CALL HDFLTC ( 'PLTNM', 'none', PLOT )
+      CALL HDFLTC ( 'PLTNM', DFPLT, PLOT )
       DSNAMES(10) = PLOT
-      CALL HDFLTC ( 'DICTNM', 'none', DIC )
+      CALL HDFLTC ( 'DICTNM', DFDIC, DIC )
       DSNAMES(4) = DIC
-      CALL HDFLTC ( 'PUNCHNM', 'none', PUNCH )
-      DSNAMES(1) = PUNCH 
+      CALL HDFLTC ( 'PUNCHNM', DFPCH, PUNCH )
+      DSNAMES(1) = PUNCH
       CALL HDFLTC ( 'SOF1', 'none', VALUE )
       SDSN(1) = VALUE
       CALL HDFLTC ( 'SOF2', 'none', VALUE )
@@ -263,10 +378,10 @@ C HALO:   otherwise. They are deleted again at the end.
      & OPEN ( 4, FILE=DSNAMES(4),STATUS='UNKNOWN')
       IF ( DSNAMES(1) .NE. 'none' )
      & OPEN ( 1, FILE=DSNAMES(1),STATUS='UNKNOWN')
-      CALL XSEM00       
-C HALO: the tidy-up lives in mds/hclean.f and is called from PEXIT, not from
-C HALO:   here: PEXIT ends with CALL EXIT(0), so nothing after CALL XSEM00 in
-C HALO:   this program is ever reached.
+      CALL XSEM00
+C HALO: the tidy-up and the exit code live in mds/hexit.f and run from
+C HALO:   the C library's exit, not from here: PEXIT ends with CALL
+C HALO:   EXIT(0), so nothing after CALL XSEM00 is ever reached.
       STOP
       END
       SUBROUTINE HDFLTC ( NAME, DFLT, VALUE )
@@ -293,5 +408,48 @@ C HALO:   environment string, which is an end-of-file error when it is unset.
          RETURN
 10       IVAL = IDFLT
       ENDIF
+      RETURN
+      END
+      SUBROUTINE HVERS
+C HALO: one line saying which build this is. NASTRAN_BUILD_ID is set at
+C HALO:   configure time by whoever builds it; blank means nobody did.
+      WRITE (0,'(A,A)') 'NASTRAN-95 (halo fork) ',
+     &   '@NASTRAN_BUILD_ID@'
+      RETURN
+      END
+      SUBROUTINE HUSAGE
+C HALO: usage, on standard error
+      CALL HVERS
+      WRITE (0,'(A)') ' '
+      WRITE (0,'(A)') 'usage:  nastran deck.inp [output_dir]'
+      WRITE (0,'(A)') '        nastran < deck.inp > deck.out'
+      WRITE (0,'(A)') ' '
+      WRITE (0,'(A)') 'The print file deck.out and the log deck.log'
+      WRITE (0,'(A)') 'are written next to the deck, or into'
+      WRITE (0,'(A)') 'output_dir. Punch, plot, dictionary and'
+      WRITE (0,'(A)') 'checkpoint files appear only if the deck'
+      WRITE (0,'(A)') 'asks for them.'
+      WRITE (0,'(A)') ' '
+      WRITE (0,'(A)') 'Exit code 0  END OF JOB and no fatal message'
+      WRITE (0,'(A)') '          1  bad arguments or a missing file'
+      WRITE (0,'(A)') '          2  the run did not reach END OF JOB'
+      WRITE (0,'(A)') '          3  a USER or SYSTEM FATAL MESSAGE'
+      WRITE (0,'(A)') ' '
+      WRITE (0,'(A)') 'Nothing else is needed: the rigid format'
+      WRITE (0,'(A)') 'library is built in and scratch files go'
+      WRITE (0,'(A)') 'under TEMP. Environment overrides, all'
+      WRITE (0,'(A)') 'optional: RFDIR, DIRCTY, OCMEM, DBMEM, LOGNM,'
+      WRITE (0,'(A)') 'PUNCHNM, PLTNM, DICTNM, NPTPNM, OPTPNM,'
+      WRITE (0,'(A)') 'FTN11..FTN21, SOF1..SOF10.'
+      RETURN
+      END
+      SUBROUTINE HUPPER ( S )
+C HALO: fold S to upper case in place, ASCII letters only
+      CHARACTER*(*) S
+      INTEGER       I, IC
+      DO 10 I = 1, LEN ( S )
+         IC = ICHAR ( S(I:I) )
+         IF ( IC .GE. 97 .AND. IC .LE. 122 ) S(I:I) = CHAR ( IC - 32 )
+10    CONTINUE
       RETURN
       END

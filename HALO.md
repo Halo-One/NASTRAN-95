@@ -12,8 +12,9 @@ live there; the short version is `nastran95/build.ps1`.
 ## What changed, and why
 
 NOSA 1.3 section 3.B requires modifications to be identified, so here they
-all are. The diff against NASA's tree is twelve files. Every source change is
-tagged `C HALO:` in place with the reason.
+all are. The diff against NASA's tree is nineteen files, and everything that
+makes the executable stand on its own is in new files or in the main program.
+Every source change is tagged `C HALO:` in place with the reason.
 
 ### Build system (new files)
 
@@ -95,11 +96,20 @@ installed on it:
 | File | Change |
 |---|---|
 | `CMakeLists.txt` | `NASTRAN_STATIC_RUNTIME`, on by default: link libgfortran and libgcc statically. Without it the executable imports `libgfortran-5.dll` from the conda environment it was built in, and Windows refuses to start it anywhere else. What is left is `KERNEL32` and the `api-ms-win-crt-*` set, which are part of Windows. |
-| `bin/nastrn.f.in` | A deck named on the command line is opened on unit 5 and `<deck>.out` on unit 6. Every environment variable gets a default; each one applies only to a blank, so a caller that sets them is unaffected. `RFDIR` is found next to the executable. A no-argument run on a terminal prints usage instead of waiting silently on stdin. |
+| `bin/nastrn.f.in` | A deck named on the command line is opened on unit 5 and `<deck>.out` on unit 6, beside the deck or in the directory given as a second argument; the solver changes into that directory and names its outputs by stem, because every name it holds is a `CHARACTER*72`. Every environment variable gets a default; each one applies only to a blank, so a caller that sets them is unaffected. A no-argument run on a terminal prints usage instead of waiting silently on stdin; `--version` prints `NASTRAN_BUILD_ID`, a configure-time string. |
 | `mds/rfopen.f` | Take `RFDIR` from `COMMON /DOSNAM/` rather than calling `GETENV` into a local of the same name. It was the only routine in the solver reading its own configuration out of the environment, which meant an executable that had worked out where its rigid format library was could load `NASINFO` and then fail to load `DISP1`. |
-| `mds/hclean.f` (new), `mis/pexit.f` | Delete the scratch files and the `none` placeholder on the way out, as NASA's csh wrapper did. Called from `PEXIT`, because `PEXIT` ends with `CALL EXIT(0)` and nothing after `CALL XSEM00` in the main program is ever reached. |
+| `utility/hrfgen.f` (new), `CMakeLists.txt` | The rigid format library is compiled in. At build time `hrfgen` turns every file in `rf/` into a generated `hrflib.f`: one `WRITE` of a character constant per line, split into 40-character pieces so nothing passes column 72, apostrophes doubled, one subroutine per file. `HRFLIB(dir)` writes the library into a directory; `HRFDEL(dir)` removes it. At start-up the main program writes it into the scratch directory and points `RFDIR` there, unless `RFDIR` is set, which still wins. `RFOPEN` is untouched: it reads files from `RFDIR` as it always did. The previous arrangement - search for `rf/` next to the executable - came up empty whenever the program was run by bare name from `PATH`, because argument zero is then a bare name too. |
+| `mds/hoswin.f`, `mds/hosunx.f` (new) | Make, remove and enter a directory, where `TEMP` is, and a line to standard error: five routines against the C runtime's `_mkdir`/`_rmdir`/`_chdir`/`_write` (Windows) or `mkdir`/`rmdir`/`chdir`/`write` (POSIX), by way of `BIND(C)`. CMake compiles one of the two. The message routine exists because on some fatal paths the solver has `CLOSE`d Fortran unit 0 by the time the exit handler runs (a `CLOSE` on a unit variable that is zero), and a Fortran `WRITE` to a closed unit 0 invents a file called `fort.0` in the output directory and loses the message in it. The scratch directory is `TEMP\n95_<pid>` (`TEMP` only when it is 50 characters or shorter, because `DIRTRY` is a `CHARACTER*72` that gets `/scr90` appended; else `<system drive>\n95tmp`), made fresh per run and removed at exit, unless `DIRCTY` is set, in which case it is used and left in place. |
+| `mds/hexit.f` (new), `mds/HSTATE.COM` (new) | The exit handler. NASTRAN ends in several places - `PEXIT` is the intended one, but `ENDSYS`, `DSMG1`, `FFREAD`, `NSINFO`, `DBMIO` and a few others `STOP` or `CALL EXIT` on their own, and a runtime error ends the process from inside libgfortran - so the tidy-up is registered with the C library's `atexit()` and runs on all of them. It closes every unit, calls `HCLEAN`, removes the optional outputs left empty (`.pch`, `.plt`, `.dic`, `.nptp`), and when the deck was named on the command line reads the print file back and ends the process with `_exit(2)` if there is no `END OF JOB` banner or `_exit(3)` if there is a `USER` or `SYSTEM FATAL MESSAGE`. NASA's solver exits 0 after a fatal message, which nobody driving it from a script wants; a wrapper used to grep for this, and now the exe does. `HSTATE.COM` is the state the handler needs (mode, whether this run made the scratch directory, the print file name). |
+| `mds/hclean.f` (new), `mis/pexit.f` | Delete the scratch files, the embedded library's copy, the scratch directory when this run made it, and the `none` placeholder, as NASA's csh wrapper did. Called from `PEXIT` and again from the exit handler after every unit has been closed, which is what makes a still-open scratch file deletable on Windows; safe to repeat. |
 
-Two traps worth recording, both of which cost time:
+Three traps worth recording, all of which cost time:
+
+* **`atexit` from Fortran is fine, as long as the handler runs before the
+  runtime's own clean-up.** It does: libgfortran registers its clean-up at
+  program start and handlers run last-registered first, so Fortran I/O still
+  works inside the handler. Setting a new exit code from inside `exit()` has
+  to be `_exit()`; calling `exit()` again is undefined.
 
 * **A backslash is not an escape in Fortran by default**, so `'\'` is a
   two-character string that can never equal one character -- and every path on

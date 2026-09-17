@@ -8,13 +8,40 @@ C     XDCODE IS CALLED ONLY BY XRGDCF, XRGDTB, XRGSST, AND XRGSUB
 C
       CHARACTER*80    TEMP
       CHARACTER*8     TEMP8
+C HALO: scratch for the hand-rolled unpack below
+      CHARACTER*4     ONE
+      INTEGER         IZERO
       COMMON /SYSTEM/ IBUF,    NOUT,  DM37(37),NBPW
       COMMON /XRGDXX/ SKIP1(3),ICOL,  SKIP2(8),RECORD(20),ICHAR(80),
      1                SKIP3(2),ICOUNT,SKIP4(2),NAME(2)
       DATA    IBLANK/ 4H      /
+      DATA    IZERO / 0 /
 C
+C HALO: The READ that used to be here was
+C HALO:     READ (TEMP,20) ICHAR      with 20 FORMAT (80A1)
+C HALO:   and gfortran 16 loses every comma in it. In a formatted read from
+C HALO:   an INTERNAL unit, gfortran terminates the field at a comma even
+C HALO:   under an A edit descriptor, so a card reading
+C HALO:       ****SBST   1,  3
+C HALO:   decodes as      ****SBST   1   3      -- the comma becomes a blank
+C HALO:   and everything after it shifts left. XRGDTP then classifies the
+C HALO:   comma as a blank, the state machine in XRGDEV rejects the digit
+C HALO:   that follows, and every rigid format in rf/ fails to load with
+C HALO:   UFM 8020, SYNTAX ERROR. Measured on gfortran 16.2.0; the identical
+C HALO:   read from an EXTERNAL unit keeps the comma, which is why the card
+C HALO:   image printed in that error message still has one.
+C HALO:
+C HALO:   Unpacking the characters by hand avoids formatted input entirely.
+C HALO:   The packing has to match what a Hollerith constant looks like in
+C HALO:   an INTEGER, because XRGDTP compares ICHAR against 1H, 1H- and
+C HALO:   1H0..1H9: the character in the first byte, blanks after it. A
+C HALO:   CHARACTER*4 assignment pads on the right, so ONE = TEMP(K:K) is
+C HALO:   exactly that, and TRANSFER reinterprets it without converting.
       WRITE (TEMP,10) RECORD
-      READ  (TEMP,20) ICHAR
+      DO 15 K = 1,80
+      ONE      = TEMP(K:K)
+      ICHAR(K) = TRANSFER(ONE,IZERO)
+ 15   CONTINUE
  10   FORMAT (20A4)
  20   FORMAT (80A1)
       RETURN

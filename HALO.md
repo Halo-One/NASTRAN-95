@@ -12,7 +12,7 @@ live there; the short version is `nastran95/build.ps1`.
 ## What changed, and why
 
 NOSA 1.3 section 3.B requires modifications to be identified, so here they
-all are. The diff against NASA's tree is ten files. Every source change is
+all are. The diff against NASA's tree is twelve files. Every source change is
 tagged `C HALO:` in place with the reason.
 
 ### Build system (new files)
@@ -79,6 +79,35 @@ The `!DEC$ IF DEFINED(CRAY_COMPILER)` guards the Foadsf fork adds around
 `mis/rcard2.f` are not carried over. `CDIR$` has a `C` in column 1, so it is
 an ordinary comment to gfortran; those guards are only needed for Intel
 Fortran, which recognises `CDIR$` as a directive prefix.
+
+## Making the executable stand alone
+
+NASA's `nastran.exe` cannot be handed to anyone. It reads the deck from stdin,
+writes the print file to stdout, and takes the name of every other file from an
+environment variable -- about twenty-five of them, none with a default. An
+unset `DBMEM` is not a default; it is an end-of-file on an integer `READ`. The
+supported way to drive it was `bin/nastran`, a csh script with one user's home
+directory hard-coded in it.
+
+These changes make `nastran.exe deck.inp` work on a machine with nothing
+installed on it:
+
+| File | Change |
+|---|---|
+| `CMakeLists.txt` | `NASTRAN_STATIC_RUNTIME`, on by default: link libgfortran and libgcc statically. Without it the executable imports `libgfortran-5.dll` from the conda environment it was built in, and Windows refuses to start it anywhere else. What is left is `KERNEL32` and the `api-ms-win-crt-*` set, which are part of Windows. |
+| `bin/nastrn.f.in` | A deck named on the command line is opened on unit 5 and `<deck>.out` on unit 6. Every environment variable gets a default; each one applies only to a blank, so a caller that sets them is unaffected. `RFDIR` is found next to the executable. A no-argument run on a terminal prints usage instead of waiting silently on stdin. |
+| `mds/rfopen.f` | Take `RFDIR` from `COMMON /DOSNAM/` rather than calling `GETENV` into a local of the same name. It was the only routine in the solver reading its own configuration out of the environment, which meant an executable that had worked out where its rigid format library was could load `NASINFO` and then fail to load `DISP1`. |
+| `mds/hclean.f` (new), `mis/pexit.f` | Delete the scratch files and the `none` placeholder on the way out, as NASA's csh wrapper did. Called from `PEXIT`, because `PEXIT` ends with `CALL EXIT(0)` and nothing after `CALL XSEM00` in the main program is ever reached. |
+
+Two traps worth recording, both of which cost time:
+
+* **A backslash is not an escape in Fortran by default**, so `'\'` is a
+  two-character string that can never equal one character -- and every path on
+  Windows is spelled with backslashes. The directory scan silently found no
+  separator at all. `CHAR(92)` is unambiguous.
+* **Nothing may pass column 72.** A `WRITE` whose string ran to column 74 was
+  truncated mid-literal and the compiler reported an unterminated character
+  constant several lines later.
 
 ## Licence
 

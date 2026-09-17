@@ -42,8 +42,11 @@ C HALO:   That second case is a wrong answer, not a failure, which is why
 C HALO:   this is worth the patch. 72 matches the CHARACTER*72 that
 C HALO:   bin/nastrn.f already stores these path names in; DSN gets 80 to
 C HALO:   hold the longest name that can be appended to it.
-      CHARACTER*72    RFDIR
+C HALO: RFDIR is no longer a local read straight from the environment;
+C HALO:   it comes from COMMON /DOSNAM/, which the main program fills.
+C HALO:   See the note at label 50 below for why.
       CHARACTER*80    DSN
+      INCLUDE 'NASNAMES.COM'
       COMMON /XMSSG / UFM,UWM,UIM,SFM        
       COMMON /MACHIN/ MACH        
       COMMON /XXREAD/ IN        
@@ -75,8 +78,20 @@ C
       LU = 5        
       GO TO 130        
 50    CONTINUE
-      RFDIR = ' '
-      CALL GETENV ( 'RFDIR', RFDIR )
+C HALO: This used to be
+C HALO:     RFDIR = ' '
+C HALO:     CALL GETENV ( 'RFDIR', RFDIR )
+C HALO:   into a local variable of the same name, which made RFOPEN the
+C HALO:   only routine in the whole solver that read its configuration
+C HALO:   out of the environment itself rather than out of COMMON. The
+C HALO:   main program already does the GETENV and stores the result in
+C HALO:   /DOSNAM/, so the local copy quietly ignored it -- which meant
+C HALO:   a standalone executable that works out where its own rigid
+C HALO:   format library is could load NASINFO and then fail to load
+C HALO:   DISP1, because the two take different routes to the path.
+C HALO:   Reading the COMMON makes RFDIR one setting instead of two, and
+C HALO:   the environment variable still works because that is where the
+C HALO:   main program gets it from.
       DO 55 I = 72, 1, -1
       IF ( RFDIR( I:I ) .EQ. ' ' ) GO TO 55
       LENR = I

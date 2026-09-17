@@ -152,4 +152,31 @@ target_compile_options(chkfil PRIVATE ${NASTRAN_FLAGS})
 set_target_properties(nastran nasthelp nastplot ff chkfil PROPERTIES
                       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
+# --- standalone executables -------------------------------------------------
+# Link the compiler's own runtime in, so the result is a file you can copy to
+# another machine and run.
+#
+# Without this, nastran.exe imports libgfortran-5.dll and libgcc_s_seh-1.dll
+# out of the conda environment it was built in. Anyone who copies the
+# executable somewhere else -- which is the obvious thing to do with a solver,
+# and what someone driving it from a flutter workflow will do -- gets
+#
+#     The code execution cannot proceed because libgfortran-5.dll was not found
+#
+# from Windows itself, before a line of Fortran has run. Everything else it
+# imports is api-ms-win-crt-*, which is the Windows Universal CRT and is part
+# of the operating system on Windows 10 and later.
+#
+# The cost is about 1 MB on an 18 MB binary and giving up the ability to
+# upgrade libgfortran underneath it, which is not a thing anyone wants to do
+# to a solver they have validated.
+option(NASTRAN_STATIC_RUNTIME
+       "Link libgfortran/libgcc statically so the executables stand alone" ON)
+if(NASTRAN_STATIC_RUNTIME AND CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  foreach(target nastran nasthelp nastplot ff chkfil)
+    target_link_options(${target} PRIVATE
+                        -static -static-libgfortran -static-libgcc)
+  endforeach()
+endif()
+
 install(TARGETS nastran nasthelp nastplot ff chkfil RUNTIME DESTINATION bin)

@@ -13,6 +13,16 @@ C HALO:   excluded from the build; do not edit it expecting an effect.
 C        
       CHARACTER*80    VALUE
       CHARACTER*5     TMP
+C HALO: for the standalone start-up block below
+      CHARACTER*256   ARGV, EXEPTH, DECK, STEM, RFTRY, DFLOG
+      LOGICAL         THERE, ISATTY
+C HALO: a backslash literal, written as CHAR(92). gfortran does not treat a
+C HALO:   backslash as an escape by default, so the obvious spelling is a
+C HALO:   TWO character string that can never equal one character -- and
+C HALO:   every path on Windows is spelled with backslashes, so the
+C HALO:   directory scan below silently found no separator at all.
+      CHARACTER*1     BSLASH
+      INTEGER         NARG, LD, LS, LE, K
       INTEGER         SPERLK
       REAL            SYSTM(94)
       COMMON / LSTADD / LASTAD
@@ -41,10 +51,127 @@ C
       LEN = 80
       VALUE = ' '
       CALL BTSTRP
-      CALL GETENV ( 'DBMEM', VALUE )
-      READ ( VALUE, * ) IDBLEN
-      CALL GETENV ( 'OCMEM', VALUE )
-      READ ( VALUE, * ) IOCMEM
+C
+C HALO: ---------- standalone start-up -------------------------------------
+C HALO:
+C HALO:   NASA's nastran.exe reads the deck from stdin, writes the print file
+C HALO:   to stdout, and takes the name of every other file it touches from an
+C HALO:   environment variable -- about twenty-five of them, with no defaults.
+C HALO:   An unset DBMEM is not a default, it is an end-of-file on an integer
+C HALO:   READ. That is workable when a wrapper sets everything up, and
+C HALO:   useless when someone wants to call the solver from their own
+C HALO:   workflow, or simply double-clicks it.
+C HALO:
+C HALO:   So: if a file name is given on the command line, run that deck and
+C HALO:   write <deck>.out beside it, and give every environment variable a
+C HALO:   sensible default when it is not set. Nothing here changes a run
+C HALO:   where the variables ARE set -- each default only applies to a blank
+C HALO:   -- so the Python runner is unaffected.
+C HALO:
+C HALO:       nastran.exe wing.inp
+C HALO:
+      NARG  = IARGC()
+      DECK  = ' '
+C HALO: the run log defaults to a real file, not to 'none'. Unit 3 is only
+C HALO:   OPENed when its name is not 'none', and NASTRAN writes to it
+C HALO:   regardless -- so leaving it unset makes gfortran invent a file
+C HALO:   called fort.3 in the working directory. With a deck named on the
+C HALO:   command line this becomes <deck>.log a few lines further down.
+      DFLOG  = 'nastran.log'
+      BSLASH = CHAR(92)
+      IF ( NARG .GE. 1 ) CALL GETARG ( 1, DECK )
+      IF ( DECK .NE. ' ' ) GO TO 4
+C HALO: No deck named. Reading it from standard input is the original
+C HALO:   behaviour and still works, so only complain when standard input is
+C HALO:   a terminal -- which is what a double-click looks like, and which
+C HALO:   otherwise leaves the solver sitting there apparently doing nothing
+C HALO:   while it waits for someone to type a bulk data deck.
+      IF ( .NOT. ISATTY(5) ) GO TO 5
+      WRITE (0,*) 'NASTRAN-95'
+      WRITE (0,*) ' '
+      WRITE (0,*) 'Usage:  nastran deck.inp'
+      WRITE (0,*) '        nastran < deck.inp > deck.out'
+      WRITE (0,*) ' '
+      WRITE (0,*) 'Writes <deck>.out and <deck>.log beside the deck.'
+      WRITE (0,*) 'See README.txt for the settings.'
+      STOP
+4     CONTINUE
+C HALO: strip a .inp/.dat/.bdf suffix to get the stem for the output names
+      LD   = INDEX ( DECK, ' ' ) - 1
+      IF ( LD .LE. 0 ) LD = LEN_TRIM ( DECK )
+      STEM = DECK(1:LD)
+      LS   = LD
+      DO 2 K = LD, 2, -1
+         IF ( DECK(K:K) .EQ. '/' .OR. DECK(K:K) .EQ. BSLASH )
+     &      GO TO 3
+         IF ( DECK(K:K) .EQ. '.' ) THEN
+            STEM = DECK(1:K-1)
+            LS   = K - 1
+            GO TO 3
+         ENDIF
+2     CONTINUE
+3     CONTINUE
+      INQUIRE ( FILE = DECK(1:LD), EXIST = THERE )
+      IF ( .NOT. THERE ) THEN
+         WRITE (0,*) 'NASTRAN: cannot find input deck ', DECK(1:LD)
+         STOP
+      ENDIF
+      OPEN ( 5, FILE = DECK(1:LD),        STATUS = 'OLD' )
+      OPEN ( 6, FILE = STEM(1:LS)//'.out', STATUS = 'UNKNOWN' )
+      WRITE (0,*) 'NASTRAN: ', DECK(1:LD), ' -> ', STEM(1:LS)//'.out'
+      DFLOG = STEM(1:LS)//'.log'
+5     CONTINUE
+C HALO: RFDIR holds the rigid format library and is read at run time, so the
+C HALO:   solver has to be told where it is. Look next to the executable
+C HALO:   first, then one directory up, then in a sibling solver/rf -- which
+C HALO:   covers both a deployed copy and a working build tree. NASINFO is
+C HALO:   the marker file; it only ever lives in rf/.
+      CALL GETENV ( 'RFDIR', VALUE )
+      IF ( VALUE .NE. ' ' ) GO TO 9
+      CALL GETARG ( 0, EXEPTH )
+      LE = LEN_TRIM ( EXEPTH )
+      DO 6 K = LE, 1, -1
+         IF ( EXEPTH(K:K) .EQ. '/' .OR. EXEPTH(K:K) .EQ. BSLASH )
+     &      GO TO 7
+6     CONTINUE
+C HALO: no separator at all means the program was found on PATH, so argument
+C HALO:   zero is a bare name and there is no directory in it to use. Look in
+C HALO:   the current directory instead of in EXEPTH(1:1), which would be the
+C HALO:   first letter of the program's own name.
+      EXEPTH = '.'
+      K      = 2
+7     LE = K - 1
+      IF ( LE .LT. 1 ) LE = 1
+      DO 8 K = 1, 3
+         IF ( K .EQ. 1 ) RFTRY = EXEPTH(1:LE)//'/rf'
+         IF ( K .EQ. 2 ) RFTRY = EXEPTH(1:LE)//'/../rf'
+         IF ( K .EQ. 3 ) RFTRY = EXEPTH(1:LE)//'/../solver/rf'
+         INQUIRE ( FILE = RFTRY(1:LEN_TRIM(RFTRY))//'/NASINFO',
+     &             EXIST = THERE )
+         IF ( THERE ) THEN
+            VALUE = RFTRY
+            GO TO 9
+         ENDIF
+8     CONTINUE
+      WRITE (0,*) 'NASTRAN: cannot find the rigid format library.'
+      WRITE (0,*) '  Looked beside ', EXEPTH(1:LE)
+      WRITE (0,*) '  Set RFDIR to the directory holding NASINFO.'
+9     CONTINUE
+C HALO: RFDIR lives in a CHARACTER*72 and Fortran truncates silently, so a
+C HALO:   deep install directory does not fail at the assignment -- it fails
+C HALO:   later, opening '/NASINFO', which looks like a corrupt install
+C HALO:   rather than a long path. Say so here instead.
+      IF ( LEN_TRIM(VALUE) .LE. 72 ) GO TO 95
+      WRITE (0,*) 'NASTRAN: the rigid format directory is too long.'
+      WRITE (0,*) '  NASTRAN stores it in 72 characters and yours is',
+     &            LEN_TRIM(VALUE)
+      WRITE (0,*) '  ', VALUE(1:72)
+      WRITE (0,*) '  Move the installation somewhere shorter.'
+      STOP
+95    RFDIR = VALUE
+C HALO: memory, and the rest of the file names
+      CALL HDFLTI ( 'OCMEM',  2000000, IOCMEM )
+      CALL HDFLTI ( 'DBMEM', 12000000, IDBLEN )
       IF ( IOCMEM .LE. LENOPC ) GO TO 10
       PRINT *,' LARGEST VALUE FOR OPEN CORE ALLOWED IS:',LENOPC
       CALL MESAGE ( -61, 0, 0 )
@@ -58,9 +185,10 @@ C
       SPERLK = 1        
       ISYSTM(11) = 1        
       VALUE = ' '
-      CALL GETENV ( 'RFDIR',  RFDIR  )
       VALUE = ' '
-      CALL GETENV ( 'DIRCTY', DIRTRY )
+C HALO: scratch files land in the current directory unless told
+C HALO:   otherwise. They are deleted again at the end.
+      CALL HDFLTC ( 'DIRCTY', '.', DIRTRY )
       LEN = INDEX( DIRTRY, ' ' ) - 1
       DO 20 I = 1, 90
       IF ( I .LE. 9 ) WRITE ( TMP, 901 ) I
@@ -69,61 +197,62 @@ C
 902   FORMAT('scr',I2)
       DSNAMES( I ) = DIRTRY(1:LEN)//'/'//TMP
 20    CONTINUE
-      CALL GETENV ( 'LOGNM', LOG )
+      CALL HDFLTC ( 'LOGNM', DFLOG, LOG )
       DSNAMES(3) = LOG
-      CALL GETENV ( 'OPTPNM', OPTP )
+      CALL HDFLTC ( 'OPTPNM', 'none', OPTP )
       DSNAMES(7)  = OPTP
-      CALL GETENV ( 'NPTPNM', NPTP )
+      CALL HDFLTC ( 'NPTPNM', 'none', NPTP )
       DSNAMES(8)  = NPTP
-      CALL GETENV ( 'FTN11', OUT11 )
+      CALL HDFLTC ( 'FTN11', 'none', OUT11 )
       DSNAMES(11) = OUT11
-      CALL GETENV ( 'FTN12', IN12 )
+      CALL HDFLTC ( 'FTN12', 'none', IN12 )
       DSNAMES(12) = IN12
-      CALL GETENV ( 'FTN13', VALUE )
+      CALL HDFLTC ( 'FTN13', 'none', VALUE )
       DSNAMES(13) = VALUE
-      CALL GETENV ( 'FTN14', VALUE )
+      CALL HDFLTC ( 'FTN14', 'none', VALUE )
       DSNAMES(14) = VALUE
-      CALL GETENV ( 'FTN15', VALUE )
+      CALL HDFLTC ( 'FTN15', 'none', VALUE )
       DSNAMES(15) = VALUE
-      CALL GETENV ( 'FTN16', VALUE )
+      CALL HDFLTC ( 'FTN16', 'none', VALUE )
       DSNAMES(16) = VALUE
-      CALL GETENV ( 'FTN17', VALUE )
+      CALL HDFLTC ( 'FTN17', 'none', VALUE )
       DSNAMES(17) = VALUE
-      CALL GETENV ( 'FTN18', VALUE )
+      CALL HDFLTC ( 'FTN18', 'none', VALUE )
       DSNAMES(18) = VALUE
-      CALL GETENV ( 'FTN19', VALUE )
+      CALL HDFLTC ( 'FTN19', 'none', VALUE )
       DSNAMES(19) = VALUE
-      CALL GETENV ( 'FTN20', VALUE )
+      CALL HDFLTC ( 'FTN20', 'none', VALUE )
       DSNAMES(20) = VALUE
-      CALL GETENV ( 'FTN21', VALUE )
+      CALL HDFLTC ( 'FTN21', 'none', VALUE )
       DSNAMES(21) = VALUE
-      CALL GETENV ( 'PLTNM', PLOT )
+      CALL HDFLTC ( 'PLTNM', 'none', PLOT )
       DSNAMES(10) = PLOT
-      CALL GETENV ( 'DICTNM', DIC )
+      CALL HDFLTC ( 'DICTNM', 'none', DIC )
       DSNAMES(4) = DIC
-      CALL GETENV ( 'PUNCHNM', PUNCH )
+      CALL HDFLTC ( 'PUNCHNM', 'none', PUNCH )
       DSNAMES(1) = PUNCH 
-      CALL GETENV ( 'SOF1', VALUE )
+      CALL HDFLTC ( 'SOF1', 'none', VALUE )
       SDSN(1) = VALUE
-      CALL GETENV ( 'SOF2', VALUE )
+      CALL HDFLTC ( 'SOF2', 'none', VALUE )
       SDSN(2) = VALUE
-      CALL GETENV ( 'SOF3', VALUE )
+      CALL HDFLTC ( 'SOF3', 'none', VALUE )
       SDSN(3) = VALUE
-      CALL GETENV ( 'SOF4', VALUE )
+      CALL HDFLTC ( 'SOF4', 'none', VALUE )
       SDSN(4) = VALUE
-      CALL GETENV ( 'SOF5', VALUE )
+      CALL HDFLTC ( 'SOF5', 'none', VALUE )
       SDSN(5) = VALUE
-      CALL GETENV ( 'SOF6', VALUE )
+      CALL HDFLTC ( 'SOF6', 'none', VALUE )
       SDSN(6) = VALUE
-      CALL GETENV ( 'SOF7', VALUE )
+      CALL HDFLTC ( 'SOF7', 'none', VALUE )
       SDSN(7) = VALUE
-      CALL GETENV ( 'SOF8', VALUE )
+      CALL HDFLTC ( 'SOF8', 'none', VALUE )
       SDSN(8) = VALUE
-      CALL GETENV ( 'SOF9', VALUE )
+      CALL HDFLTC ( 'SOF9', 'none', VALUE )
       SDSN(9) = VALUE
-      CALL GETENV ( 'SOF10', VALUE )
+      CALL HDFLTC ( 'SOF10', 'none', VALUE )
       SDSN(10) = VALUE
-      OPEN (  3, FILE=DSNAMES(3) ,STATUS='UNKNOWN')
+      IF ( DSNAMES(3) .NE. 'none' )
+     & OPEN (  3, FILE=DSNAMES(3) ,STATUS='UNKNOWN')
       IF ( DSNAMES(11) .NE. 'none' )
      & OPEN ( 11, FILE=DSNAMES(11),STATUS='UNKNOWN')
       IF ( DSNAMES(12) .NE. 'none' )
@@ -135,5 +264,34 @@ C
       IF ( DSNAMES(1) .NE. 'none' )
      & OPEN ( 1, FILE=DSNAMES(1),STATUS='UNKNOWN')
       CALL XSEM00       
+C HALO: the tidy-up lives in mds/hclean.f and is called from PEXIT, not from
+C HALO:   here: PEXIT ends with CALL EXIT(0), so nothing after CALL XSEM00 in
+C HALO:   this program is ever reached.
       STOP
-      END        
+      END
+      SUBROUTINE HDFLTC ( NAME, DFLT, VALUE )
+C HALO: GETENV, but a blank or unset variable yields DFLT instead of a blank.
+      CHARACTER*(*) NAME, DFLT
+      CHARACTER*(*) VALUE
+      VALUE = ' '
+      CALL GETENV ( NAME, VALUE )
+      IF ( VALUE .EQ. ' ' ) VALUE = DFLT
+      RETURN
+      END
+      SUBROUTINE HDFLTI ( NAME, IDFLT, IVAL )
+C HALO: the same for an integer. The original did READ(VALUE,*) on the raw
+C HALO:   environment string, which is an end-of-file error when it is unset.
+      CHARACTER*(*) NAME
+      CHARACTER*80  VALUE
+      INTEGER       IDFLT, IVAL
+      VALUE = ' '
+      CALL GETENV ( NAME, VALUE )
+      IF ( VALUE .EQ. ' ' ) THEN
+         IVAL = IDFLT
+      ELSE
+         READ ( VALUE, *, ERR = 10, END = 10 ) IVAL
+         RETURN
+10       IVAL = IDFLT
+      ENDIF
+      RETURN
+      END

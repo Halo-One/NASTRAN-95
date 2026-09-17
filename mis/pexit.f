@@ -62,5 +62,10 @@ C
       CLOSE ( I )
 200   CONTINUE
 CWKBR 8/94 SUN  CALL EXIT
+C HALO: tidy up the scratch files and the 'none' placeholder. This is the
+C HALO:   last point at which anything can run -- CALL EXIT does not
+C HALO:   return -- and the units above have just been closed, which is
+C HALO:   what makes the files deletable.
+      CALL HCLEAN
       CALL EXIT( 0 )
       END

@@ -12,7 +12,7 @@ live there; the short version is `nastran95/build.ps1`.
 ## What changed, and why
 
 NOSA 1.3 section 3.B requires modifications to be identified, so here they
-all are. The diff against NASA's tree is nine files. Every source change is
+all are. The diff against NASA's tree is ten files. Every source change is
 tagged `C HALO:` in place with the reason.
 
 ### Build system (new files)
@@ -42,6 +42,25 @@ It is excluded from the build; editing it has no effect.
 | `mds/cputim.f`, `mds/nastim.f` | `CALL ETIME(ARRAY)` → `CALL ETIME(ARRAY,TOTAL)`. gfortran's `ETIME` is a two-argument subroutine. The value used is still `ARRAY(2)`, exactly as NASA had it, so no timing behaviour moves. |
 | `mis/endsys.f`, `mis/pexit.f` | `LINK` added to `EXTERNAL`. gfortran provides `LINK` as a GNU intrinsic wrapping `link(2)`, which an undeclared `CALL LINK` binds to instead of NASTRAN's own overlay-switch routine. |
 | `mis/sofut.f` | `RENAME` added to `EXTERNAL`, for the same reason: gfortran's `RENAME` intrinsic renames a file, and the one meant here is the five-argument substructure rename in `mis/rename.f`. |
+| `mis/xdcode.f` | The card decoder no longer round-trips through a formatted read from an internal unit. gfortran 16 terminates such a field at a comma even under an `A` edit descriptor, so `****SBST   1,  3` decoded with the comma turned into a blank and every rigid format failed to load with UFM 8020. The same read from an *external* unit keeps the comma. |
+
+### One change that is not a compiler fix
+
+`mds/rfopen.f` held the rigid format directory and the assembled path in
+`CHARACTER*44`. The path is built as `RFDIR // '/' // name`, so a 38-character
+`RFDIR` leaves five characters for the name, and Fortran truncates the
+assignment without a word:
+
+* `AERO10` became `AERO1`, which does not exist, so those decks stopped.
+* `DISP10` became `DISP1`, **which does exist**. A deck asking for complex
+  eigenvalue analysis silently ran rigid format 1, statics, and the only
+  symptom was a later complaint about a missing LOAD card.
+
+The second of those is a wrong answer rather than a failure, which is why it is
+worth changing NASA's code over. `RFDIR` is now `CHARACTER*72`, matching what
+`bin/nastrn.f` already stores these names in, and `DSN` is `CHARACTER*80`.
+Fixing it took the number of demonstration decks reproducing NASA's own output
+from 55 to 70.
 
 Nothing else. In particular, no numerical code, no algorithm and no element
 formulation has been touched.

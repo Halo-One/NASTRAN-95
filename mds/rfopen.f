@@ -24,7 +24,26 @@ C
       CHARACTER*8     MB8,FREE8,ADD(3)        
       CHARACTER       UFM*23,UWM*25,UIM*29,SFM*25        
 CWKBI 
-      CHARACTER*44    RFDIR, DSN
+C HALO: RFDIR and DSN were both CHARACTER*44, and that is not enough room
+C HALO:   for a real directory. DSN is built as RFDIR // '/' // MB6, so a
+C HALO:   37-character RFDIR leaves six for the rigid format name and a
+C HALO:   38-character one leaves five. Fortran truncates a CHARACTER
+C HALO:   assignment silently, so the failure is not an error:
+C HALO:
+C HALO:     APP AERO / SOL 10 asked for AERO10 and got AERO1, which does
+C HALO:     not exist, so the job stopped -- visibly.
+C HALO:
+C HALO:     APP DISPLACEMENT / SOL 10 asked for DISP10 and got DISP1,
+C HALO:     which DOES exist. The job then ran rigid format 1 (statics)
+C HALO:     for a deck that asked for complex eigenvalue analysis, and the
+C HALO:     only symptom was a later complaint about a missing LOAD card.
+C HALO:
+C HALO:   That second case is a wrong answer, not a failure, which is why
+C HALO:   this is worth the patch. 72 matches the CHARACTER*72 that
+C HALO:   bin/nastrn.f already stores these path names in; DSN gets 80 to
+C HALO:   hold the longest name that can be appended to it.
+      CHARACTER*72    RFDIR
+      CHARACTER*80    DSN
       COMMON /XMSSG / UFM,UWM,UIM,SFM        
       COMMON /MACHIN/ MACH        
       COMMON /XXREAD/ IN        
@@ -58,12 +77,12 @@ C
 50    CONTINUE
       RFDIR = ' '
       CALL GETENV ( 'RFDIR', RFDIR )
-      DO 55 I = 44, 1, -1
+      DO 55 I = 72, 1, -1
       IF ( RFDIR( I:I ) .EQ. ' ' ) GO TO 55
       LENR = I
       GO TO 56
 55    CONTINUE
-      LENR = 44
+      LENR = 72
 56    DSN = ' '
       DSN = RFDIR(1:LENR) // '/' // MB6
 CWKBR IF (J .EQ. 6) OPEN (UNIT=IN,FILE=MB6,ACCESS='SEQUENTIAL',ERR=100, 
@@ -89,7 +108,7 @@ C
 CWKBR100  WRITE  (NOUT,110) SFM,MB8        
  100  WRITE  (NOUT,110) SFM,DSN        
 CWKBR 110  FORMAT (A25,', RFOPEN CAN NOT OPEN ',A8)        
- 110  FORMAT (A25,', RFOPEN CAN NOT OPEN ',A44)        
+ 110  FORMAT (A25,', RFOPEN CAN NOT OPEN ',A80)
 C        
       IF (MACH.GT.7 .AND. MACH.NE.21) WRITE (NOUT,120) MACH        
  120  FORMAT (5X,'MACHINE',I4,' IS NOT AVAILABLE/RFOPEN')        

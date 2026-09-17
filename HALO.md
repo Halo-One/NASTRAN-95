@@ -45,6 +45,16 @@ It is excluded from the build; editing it has no effect.
 | `mis/sofut.f` | `RENAME` added to `EXTERNAL`, for the same reason: gfortran's `RENAME` intrinsic renames a file, and the one meant here is the five-argument substructure rename in `mis/rename.f`. |
 | `mis/xdcode.f` | The card decoder no longer round-trips through a formatted read from an internal unit. gfortran 16 terminates such a field at a comma even under an `A` edit descriptor, so `****SBST   1,  3` decoded with the comma turned into a blank and every rigid format failed to load with UFM 8020. The same read from an *external* unit keeps the comma. |
 
+### A second change that is not a compiler fix
+
+`mds/tdate.f` built the two-digit year the page header prints as
+`DATE1(3) - 1900`. gfortran's `IDATE` returns the full year, so from 2000
+onwards that overflows the `I2` field in `mis/page.f` and every page of every
+print file reads `SEP 17, **` instead of a date. It is now `MOD(DATE1(3),100)`,
+the two digits NASA meant. The year is also packed into the checkpoint tape id
+in `mis/xcsa.f` in an eight-bit field, which 26 fits and 126 only just did. No
+number in any print file changes.
+
 ### One change that is not a compiler fix
 
 `mds/rfopen.f` held the rigid format directory and the assembled path in

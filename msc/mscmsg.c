@@ -55,9 +55,13 @@ void msc_msg_close(void)
 }
 
 /* Wrap the body at 72 columns and indent it under the banner, the way
- * NASTRAN lays its own messages out. Long element names and file paths
- * are not broken; a path that runs past the margin is easier to read
- * whole than folded.                                                  */
+ * NASTRAN lays its own messages out. A newline in the text is a hard
+ * break, so a message that has already laid itself out comes through
+ * unchanged; anything longer folds on a space. A single word wider
+ * than the margin - an element name, a file path - is left whole and
+ * allowed to run past it, being easier to read that way than folded. */
+#define MSC_WRAP 72
+
 static void emit(msc_sev sev, int num, const char *body)
 {
     char        line[MSC_LINELEN];
@@ -71,14 +75,33 @@ static void emit(msc_sev sev, int num, const char *body)
     for (k = 0; k < nout; k++) {
         fprintf(out[k], "*** %s %d (MSCXLAT)\n", sev_text(sev), num);
     }
-    p = body;
     while (*p) {
         const char *nl = strchr(p, '\n');
-        size_t      n  = nl ? (size_t)(nl - p) : strlen(p);
-        if (n >= sizeof(line)) n = sizeof(line) - 1;
-        memcpy(line, p, n);
-        line[n] = '\0';
-        for (k = 0; k < nout; k++) fprintf(out[k], "    %s\n", line);
+        size_t      n  = nl ? (size_t) (nl - p) : strlen(p);
+        const char *q  = p;
+
+        if (n == 0)                       /* a blank line stays blank */
+            for (k = 0; k < nout; k++) fprintf(out[k], "\n");
+
+        while (n > 0) {
+            size_t take = n, w;
+            if (take > MSC_WRAP) {
+                take = MSC_WRAP;
+                while (take > 0 && q[take] != ' ') take--;
+                if (take == 0) {          /* one long word: keep it whole */
+                    take = MSC_WRAP;
+                    while (take < n && q[take] != ' ') take++;
+                }
+            }
+            w = take;
+            while (w > 0 && q[w-1] == ' ') w--;
+            if (w >= sizeof(line)) w = sizeof(line) - 1;
+            memcpy(line, q, w);
+            line[w] = '\0';
+            for (k = 0; k < nout; k++) fprintf(out[k], "    %s\n", line);
+            q += take; n -= take;
+            while (n > 0 && *q == ' ') { q++; n--; }
+        }
         if (!nl) break;
         p = nl + 1;
     }
@@ -180,8 +203,9 @@ void msc_tally_print(void)
     if (logfp) { out[1] = logfp; nout = 2; }
     for (k = 0; k < nout; k++) {
         fprintf(out[k], "\n    WHAT BECAME OF EACH CARD\n");
+        fprintf(out[k], "      %-32s %-22s %6s\n", "CARD", "WHAT BECAME OF IT", "COUNT");
         for (i = 0; i < ntally; i++)
-            fprintf(out[k], "      %-40s %-12s %8ld\n",
+            fprintf(out[k], "      %-32s %-22s %6ld\n",
                     tally[i].name, tally[i].kind, tally[i].n);
         fprintf(out[k], "\n");
     }

@@ -691,6 +691,17 @@ static void renumber_ids(msc_ctx *x, msc_card *c)
         static const int fs[] = { 2, 5 };
         small_ids(x, c, fs, 2);
     }
+    /* PARAM,GRDPNT,<grid>: the weight generator's reference point is a
+     * grid id and moves with the grid, or the two codes report the c.g.
+     * from different points (0.15 m apart on the monarch_ff model, the
+     * aero reference grid's height, with every inertia agreeing)      */
+    else if (msc_streq(n, "PARAM")) {
+        char pn[16];
+        strncpy(pn, msc_f(c, 1), sizeof(pn) - 1);
+        pn[sizeof(pn) - 1] = '\0';
+        msc_upper(pn);
+        if (msc_streq(pn, "GRDPNT")) small_id(x, c, 2);
+    }
     /* the rest, as a table: which fields hold a grid id, and from which
      * field onwards every field does (a list card). A card in neither
      * place holds no grid ids, and a new card type that does needs a

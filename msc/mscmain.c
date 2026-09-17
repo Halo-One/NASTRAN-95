@@ -42,9 +42,10 @@ int msc_run(const char *in, const char *out, const char *msgfile, int *rf,
 
     if (rc == 0) {
         msc_msg(MSC_INFO, 9001,
-            "SOL %d became rigid format %d (APP %s). %d cards written, %d\n"
-            "dropped, %d ids renumbered, %d degrees of freedom constrained\n"
-            "for want of stiffness. The translated deck is %s.",
+            "SOL %d became rigid format %d (APP %s).\n"
+            "%d cards written, %d dropped, %d ids renumbered, %d degrees\n"
+            "of freedom constrained for want of stiffness.\n"
+            "The translated deck is %s.",
             st.sol, st.rf, st.app, st.translated, st.dropped,
             st.renumbered, st.autospc, out);
     } else {

@@ -216,17 +216,31 @@ void msc_op4_alter(FILE *fp, int rf)
 /* ------------------------------------------------------------------ */
 /* NASTRAN-95's formatted OUTPUT4 into MSC's                           */
 
-static int read_tokens(FILE *fp, double *v, int n)
+/* NASTRAN-95's formatted records are fixed-width Fortran output, not
+ * whitespace-separated tokens: single precision is 1X,10E13.6 and double
+ * 1X,8D16.9, and a negative number fills its field to the edge, so two
+ * adjacent negatives touch ("-1.111420E-01-2.222220E-02"). They are
+ * read by slicing the line at the field width.                        */
+static int read_values(FILE *fp, double *v, int n, int width)
 {
-    char tok[64];
-    int  i;
-    for (i = 0; i < n; i++) {
-        char *d;
-        if (fscanf(fp, "%63s", tok) != 1) return i;
-        for (d = tok; *d; d++) if (*d == 'D' || *d == 'd') *d = 'E';
-        v[i] = atof(tok);
+    char line[512];
+    int  got = 0;
+    while (got < n) {
+        size_t len, pos;
+        if (!fgets(line, sizeof(line), fp)) return got;
+        len = strlen(line);
+        while (len && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
+        for (pos = 1; pos + 1 <= len && got < n; pos += (size_t) width) {
+            char tok[32], *d;
+            size_t w = (len - pos < (size_t) width) ? len - pos : (size_t) width;
+            memcpy(tok, line + pos, w);
+            tok[w] = '\0';
+            for (d = tok; *d; d++) if (*d == 'D' || *d == 'd') *d = 'E';
+            if (msc_isblank_line(tok)) continue;
+            v[got++] = atof(tok);
+        }
     }
-    return n;
+    return got;
 }
 
 static int convert_one(const op4_req *r)
@@ -235,8 +249,7 @@ static int convert_one(const op4_req *r)
     char   line[512];
     long   nc, nr, form, type;
     char   name[16];
-    double hv[4];
-    int    k, col;
+    int    k, width;
 
     in = fopen(r->temp, "r");
     if (!in) {
@@ -287,11 +300,16 @@ static int convert_one(const op4_req *r)
     /* MSC: NCOL NROW FORM TYPE (4I8) NAME (A8) then the format          */
     fprintf(out, "%8ld%8ld%8ld%8ld%-8s1P,5E16.9\n", nc, nr, form, 2L, r->db);
 
-    for (col = 0; ; col++) {
+    /* the value field width, from outpt4.f's own formats: single
+     * precision 1X,10E13.6 and double 1X,8D16.9                      */
+    width = (type == 2) ? 16 : 13;
+
+    for (;;) {
         double *vals;
         long    ic, ir, nw;
-        if (read_tokens(in, hv, 3) != 3) break;
-        ic = (long) hv[0]; ir = (long) hv[1]; nw = (long) hv[2];
+        /* K II JJ, a record of its own: 1X,3I13 single, 1X,3I16 double */
+        if (!fgets(line, sizeof(line), in)) break;
+        if (sscanf(line, "%ld %ld %ld", &ic, &ir, &nw) != 3) break;
         if (ic > nc) {
             /* columns past the cut still have to be read past */
             /* the trailer column: MSC writes it as NCOL+1 1 1 and one 1.0 */
@@ -299,8 +317,40 @@ static int convert_one(const op4_req *r)
             break;
         }
         if (nw < 0) nw = 0;
+        /* A null column: outpt4.f zeroes II before UNPACK and UNPACK's
+         * alternate return leaves it there, so II = 0 means "no terms
+         * in this column". The record still carries JJ words, but they
+         * are the previous column's, left in the unpack buffer -- read
+         * past them and write nothing. MSC's own OUTPUT4 leaves null
+         * columns out of the file the same way (on the monarch_ff MGG
+         * that is 2611 of 7512 columns: without this the mass matrix
+         * grows a spurious row-1 entry per empty degree of freedom). */
+        if (ir == 0) {
+            double *skip;
+            long    ns = (type == 2) ? nw / 2 : nw;
+            if (ns > 0) {
+                skip = (double *) msc_alloc((size_t) ns * sizeof(double));
+                if (read_values(in, skip, (int) ns, width) != ns) {
+                    free(skip);
+                    break;
+                }
+                free(skip);
+            }
+            continue;
+        }
+        /* NASTRAN-95's third word is the length in single-precision
+         * WORDS (outpt4.f: "NW is based on S.P. word count"), so a
+         * double-precision column announces twice the values it holds;
+         * MSC's is the number of values                               */
+        if (type == 2) nw /= 2;
         vals = (double *) msc_alloc((size_t) (nw > 0 ? nw : 1) * sizeof(double));
-        if (read_tokens(in, vals, (int) nw) != nw) { free(vals); break; }
+        if (read_values(in, vals, (int) nw, width) != nw) {
+            free(vals);
+            msc_msg(MSC_WARN, 9132,
+                "%s: %s ends inside column %ld; the matrix is written short.",
+                r->file, r->db, ic);
+            break;
+        }
         fprintf(out, "%8ld%8ld%8ld\n", ic, ir, nw);
         for (k = 0; k < nw; k++) {
             fprintf(out, "%16.9E", vals[k]);
@@ -310,7 +360,7 @@ static int convert_one(const op4_req *r)
     }
     fclose(in);
     fclose(out);
-    remove(r->temp);
+    if (!getenv("N95_KEEP_OP4")) remove(r->temp);
     msc_msg(MSC_INFO, 9130, "%s: %s, %ld columns by %ld rows, in MSC's "
             "formatted OUTPUT4 layout", r->file, r->db, nc, nr);
     return 0;

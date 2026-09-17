@@ -230,6 +230,7 @@ int msc_f06(const char *path)
     char   cyc[32];
     int    i, in_vector = 0, have_cyc = 0;
     int    skip_vector = 0, in_table = 0, gpwg_rows = 0;
+    int    is_state = 0, is_rows = 0;      /* the I(S) block under the weights */
 
     memset(&b, 0, sizeof(b));
     cyc[0] = '\0';
@@ -257,8 +258,50 @@ int msc_f06(const char *path)
         }
         if (gpwg_rows > 0) {
             char out[F6LINE];
-            if (gpwg_row(line, out)) { put(&b, out); gpwg_rows--; continue; }
+            if (gpwg_row(line, out)) {
+                put(&b, out);
+                if (--gpwg_rows == 0) is_state = 1;
+                continue;
+            }
             gpwg_rows = 0;
+        }
+        /* ---- the inertia block under it ---------------------------- */
+        /* MSC prints "I(S)" and three rows at fixed columns; NASTRAN-95
+         * prints a blank, a longer label, a border of asterisks, the
+         * rows and another border. read_nastran_mass counts rows from
+         * the MASS AXIS line, so the block is reshaped to MSC's:
+         *   I(S) at +4, the three rows at +5, +6, +7                  */
+        if (is_state == 1) {
+            if (msc_isblank_line(line)) continue;
+            if (has(line, "I(S)")) {
+                put(&b, "                                                                I(S)");
+                is_state = 2; is_rows = 0;
+                continue;
+            }
+            is_state = 0;
+        } else if (is_state == 2) {
+            char w[3][40];
+            double v[3];
+            int k;
+            if (has(line, "***")) continue;                  /* the borders */
+            if (sscanf(line, " * %39s %39s %39s", w[0], w[1], w[2]) == 3) {
+                for (k = 0; k < 3; k++) {
+                    char *dd = strchr(w[k], 'D');
+                    if (dd) *dd = 'E';
+                    v[k] = atof(w[k]);
+                }
+                {
+                    char out[F6LINE];
+                    sprintf(out, "%43s* %13.6E %13.6E %13.6E *", "", v[0], v[1], v[2]);
+                    put(&b, out);
+                }
+                if (++is_rows == 3) is_state = 3;
+                continue;
+            }
+            is_state = 0;
+        } else if (is_state == 3) {
+            is_state = 0;
+            if (has(line, "***")) continue;
         }
 
         /* ---- modes past the number requested are not printed ------ */

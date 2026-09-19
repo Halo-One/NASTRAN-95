@@ -14,10 +14,14 @@ C HALO:              run and is removed on the way out
 C HALO:   HRFMK   1  the rigid format library was written into DIRTRY
 C HALO:              from the copy built into the executable, and is
 C HALO:              removed on the way out
+C HALO:   HMSCDK  1  the 1970s executable was handed a deck in MSC's
+C HALO:              dialect (a three-digit SOL, or an INCLUDE); the
+C HALO:              exit handler says to use nastran95ase when the
+C HALO:              run ends in a fatal
 C HALO:
 C HALO:   Two blocks because a COMMON that mixes CHARACTER with numeric
 C HALO:   storage is a standard violation some compilers refuse.
-      COMMON / HSTATI / HMODE, HDIRMK, HRFMK, HASE
+      COMMON / HSTATI / HMODE, HDIRMK, HRFMK, HASE, HMSCDK
       COMMON / HSTATC / HPRTF, HSTEM, HOUTD
-      INTEGER           HMODE, HDIRMK, HRFMK, HASE
+      INTEGER           HMODE, HDIRMK, HRFMK, HASE, HMSCDK
       CHARACTER*256     HPRTF, HSTEM, HOUTD

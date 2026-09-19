@@ -124,6 +124,39 @@ static const diag_entry catalogue[] = {
       "Point SOF1 in the environment at a file of your own, or delete the "
       "old one. Each substructuring phase must see the SOF the previous "
       "phase left." },
+    { "2386",
+      "The eigensolver (FEER) could not make the shifted stiffness matrix "
+      "non-singular by moving the shift: the model has a mechanism, or "
+      "degrees of freedom with neither stiffness nor mass.",
+      "Find the singular columns with a statics run of the same model "
+      "(UFM 3097 lists them), then constrain or connect them." },
+    { "2391",
+      "FEER's tridiagonal reduction produced no usable rows, so there is "
+      "no reduced problem to solve. Since the 2394 guard, this follows a "
+      "start vector with no positive mass norm: the mass matrix is "
+      "singular or indefinite along it.",
+      "Look for UWM 2394 just above. Give the massless degrees of freedom "
+      "mass (CONM2 rotary inertia terms I11, I22, I33) or remove them "
+      "(ASET/OMIT), and check that no CONM2 carries a negative mass or "
+      "an inertia tensor that is not positive definite." },
+    { "2395",
+      "The QR iteration on FEER's reduced tridiagonal matrix did not "
+      "converge, or was handed a NaN. Before this guard it spun forever; "
+      "the root cause is a trial vector that lost its mass norm (UWM "
+      "2394) on a semi-definite mass matrix.",
+      "Look for UWM 2394 earlier in the print file and treat it as that "
+      "message says: rotary inertia on the lumped masses, or ASET/OMIT "
+      "the massless rotations. DIAG 16 prints every row of the "
+      "reduction." },
+    { "GINO",
+      "The solver's own file system (GINO) found a scratch file in a state "
+      "its writer never left it in: a read past the end, or a record type "
+      "it did not expect. That is a defect in the solver's logic, not in "
+      "the model; the last module named in the log file is where.",
+      "Report it with the deck and the log. One such path, FEER's reseed "
+      "after a null trial vector with the vectors held in core, is fixed "
+      "in this fork; a new one is a bug to chase in the module the log "
+      "names." },
     { "-8",
       "A module ran out of open core (the solver's fixed working memory).",
       "Set OCMEM in the environment higher (nastran95 defaults to "
@@ -177,6 +210,11 @@ int msc_diag(const char *prt)
     while (fgets(line, sizeof(line), fp)) {
         int fatal = (strstr(line, "FATAL MESSAGE") != NULL &&
                      strstr(line, "***") != NULL);
+        /* GINO, the solver's file system, stops a run with "I/O
+         * SUBSYSTEM ERROR NUMBER nnn" and no numbered message at all;
+         * the exit handler counts it as a fatal and so does this     */
+        int gino = (strstr(line, "I/O SUBSYSTEM ERROR NUMBER") != NULL);
+        if (gino) fatal = 1;
         /* an out-of-core stop prints no message at all: ERRTRC after a
          * data block table is its signature                          */
         if (strstr(line, "ERRTRC CALLED")) core = 1;
@@ -184,7 +222,8 @@ int msc_diag(const char *prt)
         found = 1;
         if (shown) continue;
         shown = 1;
-        message_number(line, num, sizeof(num));
+        if (gino) strcpy(num, "GINO");
+        else      message_number(line, num, sizeof(num));
         fprintf(stderr, "\nnastran: the solver stopped on this message:\n");
         {
             size_t n = strlen(line);

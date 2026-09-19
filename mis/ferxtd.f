@@ -96,7 +96,15 @@ C
       GO TO 40
    20 DO 30 I = 1,NORD
    30 DSQ = DSQ + V2(I)*V2(I)
-   40 DSQ = 1.0D+0/DSQRT(DSQ)
+C HALO: a start vector with no mass norm (DSQ not positive, or NaN from
+C HALO:   an earlier one) cannot be normalized: 1/SQRT would put a NaN
+C HALO:   into every vector after it and the QR iteration in FQRWV then
+C HALO:   never converges. Give up on this reduction instead (label 500,
+C HALO:   problem size reduced to what has been found).
+   40 IF (DSQ .GT. ZERO .AND. DSQ .EQ. DSQ) GO TO 45
+      CALL FERNPD (IFN, DSQ)
+      GO TO 500
+   45 DSQ = 1.0D+0/DSQRT(DSQ)
 CQ 40 DSQ = 1.0D+0/QSQRT(DSQ)
       DO 50 I = 1,NORD
    50 V2(I) = V2(I)*DSQ
@@ -123,6 +131,15 @@ C
 C
 C     BEGINNING OF ITERATION LOOP
 C   
+C HALO: NASA's cap of 14 passes is kept. After a reseed on a
+C HALO:   semi-definite mass matrix the projections shrink by a factor
+C HALO:   of 0.6 a pass and each later vector converges slower still;
+C HALO:   60 passes bought four more rows on the model that showed it
+C HALO:   (93 modes instead of 89 of 120) and nothing on any other, so
+C HALO:   the shortfall is the algorithm's, not the cap's: FEER works
+C HALO:   in the mass metric and a semi-definite mass matrix is
+C HALO:   outside what it was written for. The translator warns about
+C HALO:   the CONM2 cards that cause it (message 9133).
    70 DO 170 IX = 1,14
       NONUL = NONUL + 1
       IF (IOPTF .EQ. 0) 
@@ -204,6 +221,9 @@ C
       DTMP = DSQ
       DSQ  = DSQ + D
       IF (DSQ .LT. DEPX2) GO TO 500
+C HALO: a NaN passes every comparison above; treat it as the null
+C HALO:   trial vector it is (see label 40)
+      IF (DSQ .NE. DSQ) GO TO 500
       DTMP = DABS(D/DTMP)
 CQ    DTMP = QABS(D/DTMP)
       IF (DTMP.GT.OMDEPX .AND. DTMP.LT.OPDEPX) GO TO 500
@@ -235,7 +255,12 @@ C
       CALL FERFBD (V2(1),V4(1),V3(1),V5(1))
       DO 230 I = 1,NORD
   230 DSQ = DSQ + V3(I)*V3(I)
-  240 DSQ = 1.0D+0/DSQRT(DSQ)
+C HALO: same guard as at label 40: the swept start vector may have no
+C HALO:   mass norm at all
+  240 IF (DSQ .GT. ZERO .AND. DSQ .EQ. DSQ) GO TO 245
+      CALL FERNPD (IFN, DSQ)
+      GO TO 500
+  245 DSQ = 1.0D+0/DSQRT(DSQ)
 CQ240 DSQ = 1.0D+0/QSQRT(DSQ)
       DO 250 I = 1,NORD
   250 V2(I) = V3(I)*DSQ
@@ -252,6 +277,8 @@ C     WHAT HAPPENS IF D IS NEGATIVE HERE? NEXT LINE WOULD BE ALWAY TRUE.
 C
       IF (D .LT. DEPX*DABS(AII)) GO TO 500
 CQ    IF (D .LT. DEPX*QABS(AII)) GO TO 500
+C HALO: and a NaN, which the line above lets through
+      IF (D .NE. D) GO TO 500
   320 CALL GOPEN (IFG,ZB(1),WRT)
       IIP = 1
       NNP = NORD
@@ -286,9 +313,24 @@ C
       GO TO 480
   460 DO 470 I = 1,NORD
   470 DB = DB + V3(I)*V3(I)
-  480 DB = DSQRT(DB)
+C HALO: DB is the mass norm of the new trial vector. When the mass
+C HALO:   matrix is only semi-definite (lumped masses without rotary
+C HALO:   inertia, say) roundoff can make it slightly negative, and
+C HALO:   DSQRT of that is NaN: the NaN fails the null-vector test
+C HALO:   below, is divided by, and poisons every later row, after
+C HALO:   which the QR iteration in FQRWV never converges. G. Chan
+C HALO:   asked "what happens if D is negative here?" in 1992 about
+C HALO:   the off-diagonal term; this is the same question for DB. A
+C HALO:   norm that is not positive means the vector has no mass
+C HALO:   component left: treat it as the null vector it is, so that
+C HALO:   the reduction reseeds (label 6000) instead of corrupting.
+  480 IF (DB .GT. ZERO .AND. DB .EQ. DB) GO TO 485
+      CALL FERNPD (IFN+1, DB)
+      DB = ZERO
+      GO TO 486
+  485 DB = DSQRT(DB)
 CQ480 DB = QSQRT(DB)
-      ERRC = SNGL(DB)
+  486 ERRC = SNGL(DB)
       B(1) = AII
       B(2) = D
       CALL WRITE (SR5FLE,B(1),4,1)
@@ -313,21 +355,53 @@ CQ480 DB = QSQRT(DB)
 C
 C NEED TO SAVE ORTHOGONAL VECTORS BACK TO FILE
 C
-      CALL GOPEN ( IFV, ZB(1), WRT ) 
-      IIP  = 1
-      NNP  = NORD
-      NIDX = NIDORV/2 + 1 
-      DO 5000 I = 1, NORTHO
-      ILOC = (I-1)*NORD + NIDX
-      CALL PACK ( ZD( ILOC ), IFV, MCBVEC(1) )
-5000  CONTINUE
-      CALL CLOSE ( IFV, NOREW )
+C HALO: rewritten from the start with the trailer reset, not appended:
+C HALO:   the file may already hold an earlier copy (see 6000 below),
+C HALO:   and the memory copy is the truth in this mode. IRET says
+C HALO:   where the save block returns to: 0 here (the reduction is
+C HALO:   complete, back to 6000 which returns), 1 for a reseed below.
+      IRET = 0
+      GO TO 5100
+C HALO: the null-vector return. In the in-core mode (NIDORV not zero,
+C HALO:   a 1994 addition) the trial vectors live in memory and only
+C HALO:   reach the file when the reduction is complete, above - but
+C HALO:   the reseed that follows a null vector re-enters this routine,
+C HALO:   which reads them back FROM THE FILE (label 65) and found
+C HALO:   nothing there: "EXPECTED A SB OR EB CONTROL WORD ON FILE
+C HALO:   SCRATCH7". So the reseed path was broken whenever the vectors
+C HALO:   fitted in core, which on a modern machine is always. Write
+C HALO:   them out before returning, the same way.
 6000  CONTINUE
       IF (IFN .GE. MORD) GO TO 630
 C
 C     IF NULL VECTOR GENERATED, RETURN TO OBTAIN A NEW SEED VECTOR
 C
-      IF (DB .LT. DEPX*DABS(AII)) GO TO 630
+      IF (DB .GE. DEPX*DABS(AII)) GO TO 6200
+      IF (NIDORV .EQ. 0) GO TO 630
+      IRET = 1
+      GO TO 5100
+6100  GO TO 630
+6200  CONTINUE
+      GO TO 6300
+C
+C HALO: save the in-memory vectors to the file: from the start, with
+C HALO:   the trailer reset so the column count is right afterwards
+C
+5100  IF (NIDORV .EQ. 0) GO TO 5200
+      MCBVEC(2) = 0
+      MCBVEC(6) = 0
+      CALL GOPEN ( IFV, ZB(1), WRTREW )
+      IIP  = 1
+      NNP  = NORD
+      NIDX = NIDORV/2 + 1
+      DO 5000 I = 1, NORTHO
+      ILOC = (I-1)*NORD + NIDX
+      CALL PACK ( ZD( ILOC ), IFV, MCBVEC(1) )
+5000  CONTINUE
+      CALL CLOSE ( IFV, NOREW )
+5200  IF (IRET .EQ. 1) GO TO 6100
+      GO TO 6000
+6300  CONTINUE
 C
 C     A GOOD VECTOR IN V2. MOVE IT INTO 'PREVIOUS' VECTOR SPACE V1,
 C     NORMALIZE V3 AND V2. LOOP BACK FOR MORE VECTORS.

@@ -23,6 +23,10 @@ C HALO:   messages are copied to, and what it found out about the run.
       CHARACTER*32    KEY
       LOGICAL         ASEMOD
       INTEGER         IRFASE, NDASE, IA, IEQ, IOFF
+C HALO: for the watchdog and the MSC-dialect notice
+      REAL            WDMIN, TIMMIN
+      INTEGER         ISOLN
+      CHARACTER*256   WDNOTE
       LOGICAL         THERE, ISATTY, CHKPT
 C HALO: a backslash literal, written as CHAR(92). gfortran does not treat a
 C HALO:   backslash as an escape by default, so the obvious spelling is a
@@ -118,6 +122,7 @@ C HALO:   two is the same solver on the same arithmetic.
       ASEMOD = @NASTRAN_ASE_MODE@
       HASE   = 0
       IF ( ASEMOD ) HASE = 1
+      HMSCDK = 0
       DFLOG  = 'nastran.log'
       DFPCH  = 'none'
       DFPLT  = 'none'
@@ -280,13 +285,26 @@ C HALO: the checkpoint tape. NASTRAN opens and writes the New Problem
 C HALO:   Tape on every run, so naming it unconditionally leaves a 16 KB
 C HALO:   file beside every print file; it only means something when the
 C HALO:   executive control says CHKPNT YES. Look, then rewind.
-      CHKPT = .FALSE.
+C HALO:   The same pass reads the TIME card (minutes, for the watchdog
+C HALO:   below) and, in the 1970s executable, notices a deck written in
+C HALO:   MSC's dialect - a three-digit SOL, or an INCLUDE - so that the
+C HALO:   fatal it is about to produce can be explained on the way out.
+      CHKPT  = .FALSE.
+      TIMMIN = 0
       DO 471 K = 1, 200
          READ ( 5, '(A)', END = 472, ERR = 472 ) VALUE
          CALL HUPPER ( VALUE )
          IF ( VALUE(1:4) .EQ. 'CEND' ) GO TO 472
          IF ( VALUE(1:6) .EQ. 'CHKPNT' .AND.
      &        INDEX ( VALUE, 'YES' ) .GT. 0 ) CHKPT = .TRUE.
+         IF ( VALUE(1:5) .EQ. 'TIME ' )
+     &      READ ( VALUE(6:), *, ERR = 471, END = 471 ) TIMMIN
+         IF ( VALUE(1:4) .EQ. 'SOL ' ) THEN
+            ISOLN = 0
+            READ ( VALUE(5:), *, ERR = 4711, END = 4711 ) ISOLN
+4711        IF ( ISOLN .GE. 100 ) HMSCDK = 1
+         ENDIF
+         IF ( VALUE(1:7) .EQ. 'INCLUDE' ) HMSCDK = 1
 471   CONTINUE
 472   REWIND 5
 C HALO: the outputs are written by RELATIVE name from inside the output
@@ -385,6 +403,34 @@ C HALO: with everything in place, the print file
       CALL EXIT ( 1 )
 78    HMODE = 1
 80    CONTINUE
+C HALO: the wall-clock watchdog (msc/mscwatch.c). NASTRAN's TIME card
+C HALO:   is only checked between modules, so a loop inside one runs
+C HALO:   until somebody kills the process; a second thread ends it
+C HALO:   instead, with a message. The limit: N95_TIMEOUT from the
+C HALO:   environment (minutes; 0 disables), else the TIME card for the
+C HALO:   1970s executable (NASA's default of 5 when it is missing),
+C HALO:   else 30 minutes for nastran95ase, whose translated decks carry
+C HALO:   a TIME that means nothing to the user.
+      CALL HDFLTC ( 'N95_TIMEOUT', ' ', VALUE )
+      IF ( VALUE .NE. ' ' ) THEN
+         READ ( VALUE, *, ERR = 82, END = 82 ) WDMIN
+         WDNOTE = 'The limit is N95_TIMEOUT from the environment.'
+         GO TO 84
+      ENDIF
+82    IF ( ASEMOD ) THEN
+         WDMIN  = 30.0
+         WDNOTE = 'The limit is nastran95ase''s default of 30 minutes.'
+      ELSE
+         WDMIN  = TIMMIN
+         IF ( WDMIN .LE. 0.0 ) WDMIN = 5.0
+         WDNOTE = 'The limit is the TIME card (5 minutes when there ' //
+     &            'is none).'
+      ENDIF
+84    IF ( WDMIN .GT. 0.0 ) THEN
+         WDNOTE = WDNOTE(1:LEN_TRIM(WDNOTE)) // CHAR(10) //
+     &            'Scratch directory: ' // DIRTRY(1:LEN_TRIM(DIRTRY))
+         CALL HMSCWD ( WDMIN, WDNOTE )
+      ENDIF
 C HALO: memory, and the rest of the file names
 C HALO: the split of open core between the modules and the in-memory
 C HALO:   database. NASA divided it 2,000,000 / 12,000,000, which suits

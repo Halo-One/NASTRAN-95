@@ -74,6 +74,7 @@ void msc_msg_close(void);
 void msc_msg_summary(void);
 void msc_tally(const char *kind, const char *name);
 void msc_tally_print(void);
+int  msc_watchdog(double minutes, const char *note);   /* msc/mscwatch.c */
 
 /* ------------------------------------------------------------------ */
 /* reading (mscread.c) */
@@ -114,6 +115,8 @@ typedef struct {
     int  translated;       /* cards rewritten                           */
     int  autospc;          /* dofs constrained because nothing held them*/
     int  renumbered;       /* ids moved below the 24-bit limit          */
+    int  conm2;            /* CONM2 cards seen                          */
+    int  conm2_norot;      /* ... of which carry no rotary inertia      */
 } msc_stats;
 
 int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st);

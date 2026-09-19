@@ -881,6 +881,19 @@ static void translate_bulk(msc_ctx *x)
                                          { do_plate(x, c, 3);  continue; }
         if (msc_streq(n, "PSHELL"))      { do_pshell(x, c);    continue; }
 
+        /* CONM2 passes through unchanged, but one property of it is
+         * worth counting: a lumped mass with no rotary inertia (fields
+         * 9-14, I11..I33, all blank or zero) makes the mass matrix
+         * semi-definite, which this solver's eigensolver was not written
+         * for. The count is reported at the end for modal solutions. */
+        if (msc_streq(n, "CONM2")) {
+            int k, rot = 0;
+            for (k = 9; k <= 14; k++)
+                if (msc_fd(c, k, 0.0) != 0.0) rot = 1;
+            x->st->conm2++;
+            if (!rot) x->st->conm2_norot++;
+        }
+
         if (in_list(n, copy_cards)) {
             pass_through(x, c);
             /* elements hold their grids up: the auto-SPC needs to know  */
@@ -1124,6 +1137,17 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
 
     st->nmodes = x.nmodes;
     st->shift  = x.shift;
+    if (st->conm2_norot > 0 && x.have_eig)
+        msc_msg(MSC_WARN, 9133,
+            "%d of %d CONM2 cards carry no rotary inertia (I11, I22, I33),\n"
+            "so the mass matrix is only semi-definite: the rotations those\n"
+            "masses define are massless. This solver's eigensolver (FEER)\n"
+            "works in the mass metric and can lose trial vectors on such a\n"
+            "matrix; it then reseeds and may return fewer modes than the\n"
+            "EIGRL asks for (UWM 2390 in the print file says how many).\n"
+            "MSC's Lanczos is not affected. For the full count, give the\n"
+            "lumped masses rotary inertia, or ask for fewer modes.",
+            st->conm2_norot, st->conm2);
     {
         int iter = 0, old, new_id;
         while (msc_map_next(&x.remap, &iter, &old, &new_id))

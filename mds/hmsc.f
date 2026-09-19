@@ -82,3 +82,24 @@ C HALO:   this one. See msc/mscf06.c for what is rewritten and why.
       IERR = CMSCF6 ( PRTF(1:LEN_TRIM(PRTF)) // C_NULL_CHAR )
       RETURN
       END
+C HALO: the wall-clock watchdog: a second thread that ends the process
+C HALO:   after WDMIN minutes with NOTE in its message. Both executables;
+C HALO:   see msc/mscwatch.c for why a thread and why _exit.
+      SUBROUTINE HMSCWD ( WDMIN, NOTE )
+      USE ISO_C_BINDING
+      IMPLICIT NONE
+      INTERFACE
+         INTEGER(C_INT) FUNCTION CMSCWD ( M, N )
+     &                           BIND(C, NAME='msc_watchdog')
+         IMPORT :: C_INT, C_CHAR, C_DOUBLE
+         REAL(C_DOUBLE), VALUE :: M
+         CHARACTER(KIND=C_CHAR), DIMENSION(*), INTENT(IN) :: N
+         END FUNCTION
+      END INTERFACE
+      REAL            WDMIN
+      CHARACTER*(*)   NOTE
+      INTEGER(C_INT)  IRC
+      IRC = CMSCWD ( REAL ( WDMIN, C_DOUBLE ),
+     &               NOTE(1:LEN_TRIM(NOTE)) // C_NULL_CHAR )
+      RETURN
+      END

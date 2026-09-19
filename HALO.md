@@ -159,6 +159,79 @@ before the solver sees it and the print file after the solver is done.
 | `CMakeLists.txt` | C added to the project; `NASTRAN_ASE_MODE` configured twice; the `msc/` sources in the library. |
 | `mds/hexit.f`, `mds/HSTATE.COM` | `HASE` state; the print-file rewrite and the fatal explainer called on the way out. |
 
+## Never hang: the FEER guards and the watchdog
+
+A 830-grid modal deck (lumped masses on rigid bars, the shape of every model in
+the caller's ASE chain) ran in a second on MSC Nastran and spun on this solver
+until killed. The mechanism, found with `DIAG 16` and the Fortran runtime's
+buffering turned off:
+
+* **`mis/ferxtd.f`, `mis/ferxts.f` (the FEER tridiagonal reduction).** At label
+  480 the mass norm of the new trial vector goes under a square root. On a mass
+  matrix that is only semi-definite - lumped masses carry no rotary inertia, so
+  every rotation is massless - roundoff put that norm at -1e-17 on row 88 of
+  250, `DSQRT` returned NaN, and every test after it is a comparison a NaN fails:
+  the "null vector, reseed" test let it through, the next row divided by it, and
+  rows 88 to 250 came out NaN. G. Chan's 1992 comment two labels earlier asks
+  "what happens if D is negative here?" about the off-diagonal term; this is the
+  same question for `DB`, and the answer was a hang. Now a norm that is not
+  positive (or is NaN) is treated as the null trial vector it is: the reduction
+  reseeds through its existing restart loop (`FEER3`, capped at MORD reseeds),
+  and `mis/fernpd.f` (new) prints `UWM 2394` once saying so. The same guard is on
+  the two start-vector normalisations (labels 40 and 240) and a NaN test joins
+  the two existing "problem size reduced" exits (labels 150 and 310). If fewer
+  modes come out than were asked for, the solver's own `UWM 2390` reports the
+  count, and the exit handler repeats both warnings on the terminal.
+* **The reseed itself was broken, in the same two files.** Once the null vector
+  was handled, the reseed re-entered `FERXTD`, which reads the previous trial
+  vectors back from scratch file 7 (label 65) - and NASA's 1994 in-core
+  modification (`NIDORV`) keeps them in memory and only writes them to that
+  file when the reduction is complete, so the reseed found nothing there and the
+  run stopped with `I/O SUBSYSTEM ERROR NUMBER 110, EXPECTED A SB OR EB CONTROL
+  WORD ON FILE SCRATCH7` - after `END OF JOB`, exit code 0, no modes. On a
+  modern open core the vectors always fit, so the reseed path had never worked
+  in this build. The in-memory vectors are now written to the file (from the
+  start, trailer reset) before every return to the reseed loop, and the exit
+  handler and the explainer count a GINO `I/O SUBSYSTEM ERROR` as the fatal
+  it is.
+* **What the model then gets.** The 830-grid deck that hung returns 89 accurate
+  modes of the 120 it asked for, in 7 seconds. After a reseed on this
+  semi-definite metric the next vector's orthogonalisation converges by a
+  factor of 0.6 a pass and each vector after it slower still; raising NASA's
+  cap of 14 passes to 60 bought four more rows and nothing else, so the cap is
+  kept at 14 and the shortfall is recorded for what it is: FEER works in the
+  mass metric and a semi-definite mass matrix is outside what it was written
+  for (MSC's Lanczos is not affected). The translator now counts the `CONM2`
+  cards with no rotary inertia and, on a modal solution, says so up front
+  (`UWM 9133`) with the cure: rotary inertia on the lumped masses, or fewer
+  modes.
+* **`mis/fqrwv.f`, `mis/fqrw.f` (the QR iteration on the reduced matrix).** The
+  sweep at label 70 had no bound. It now stops after 200 sweeps per eigenvalue
+  plus 1,000, or on a NaN in its input, with `UFM 2395` and a fatal exit
+  (`MESAGE -37`, as FEER itself does for a singular matrix). Defence in depth:
+  with the reduction guarded it should never fire.
+* **`msc/mscwatch.c` (new), `mds/hmsc.f`, `bin/nastrn.f.in`: the wall-clock
+  watchdog, both executables.** NASTRAN's `TIME` card is checked between modules
+  (`TMTOGO`), so a loop inside a module is invisible to it. A second thread now
+  sleeps for the allowed wall-clock time and ends the process with `_exit(2)` and
+  a message saying which limit applied, that the print file stops where the
+  solver was, that the scratch directory is left behind, and how to raise the
+  limit. `_exit` and not `exit`, because the main thread may be inside a Fortran
+  `WRITE` with a unit locked, and running the runtime's clean-up over that from
+  another thread is not safe. The limit is `N95_TIMEOUT` from the environment
+  (minutes, 0 disables), else the `TIME` card for the 1970s executable (NASA's
+  own default of 5 minutes when it is missing, the same number the solver
+  prints), else 30 minutes for `nastran95ase`, whose translated decks carry a
+  `TIME` that means nothing to the user; the 5,400-grid decks it exists for
+  take two minutes.
+* **`mds/hexit.f`, `bin/nastrn.f.in`: the MSC-deck notice.** The 1970s
+  executable handed an MSC deck fails on the first executive-control line with
+  `UFM 300`, which the explainer described, truthfully and uselessly, as a field
+  width problem. The start-up pass that reads `CHKPNT` now also notices a
+  three-digit `SOL` or an `INCLUDE`, and the exit handler says to use
+  `nastran95ase` instead.
+* **`msc/mscdiag.c`.** Entries for `2386`, `2391` and `2395`.
+
 ### What the front end is checked against
 
 Everything above is verified against MSC Nastran 2025.1 on the same decks, in

@@ -50,7 +50,7 @@ C HALO:   through HMSG (the C runtime), not Fortran unit 0: see hoswin.f.
       CHARACTER*160   LINE
       CHARACTER*640   MSG
       CHARACTER*5     EXT(5)
-      LOGICAL         ENDED, FATAL, THERE, HFATAL
+      LOGICAL         ENDED, FATAL, THERE, HFATAL, FEWER, NOMAS
       INTEGER         I, ICODE, ISZ, LS, LO, LP
       DATA            EXT / '.pch ', '.plt ', '.dic ', '.nptp',
      &                        '.sof ' /
@@ -92,16 +92,45 @@ C     read the print file back for the verdict
 C
       ENDED = .FALSE.
       FATAL = .FALSE.
+      FEWER = .FALSE.
+      NOMAS = .FALSE.
       OPEN ( 98, FILE = HPRTF(1:LP), STATUS = 'OLD', ERR = 40 )
 30    READ ( 98, '(A)', END = 35, ERR = 35 ) LINE
       IF ( INDEX ( LINE, 'END OF JOB' ) .GT. 0 ) ENDED = .TRUE.
       IF ( HFATAL ( LINE ) ) FATAL = .TRUE.
+C HALO: two warnings worth repeating on the terminal: the eigensolver
+C HALO:   found fewer modes than the deck asked for (2390), and why it
+C HALO:   usually did (2394, a mass matrix that is singular along some
+C HALO:   directions). A run that ends 0 with 87 of 120 modes is not
+C HALO:   the run the user meant.
+      IF ( INDEX ( LINE, 'WARNING MESSAGE 2390' ) .GT. 0 )
+     &   FEWER = .TRUE.
+      IF ( INDEX ( LINE, 'WARNING MESSAGE 2394' ) .GT. 0 )
+     &   NOMAS = .TRUE.
       GO TO 30
 35    CLOSE ( 98 )
+      IF ( FEWER ) CALL HMSG ( 'nastran: fewer modes than requested '
+     &   // 'were found (UWM 2390 in the print file has the count).' )
+      IF ( NOMAS ) CALL HMSG ( 'nastran: the mass matrix is singular '
+     &   // 'or indefinite along some directions (UWM 2394): lumped' )
+      IF ( NOMAS ) CALL HMSG ( '         masses without rotary '
+     &   // 'inertia do this. The modes found are still valid.' )
 C HALO: the message itself, and what it means, on the terminal --
 C HALO:   nobody should have to open the print file to learn that a
 C HALO:   grid was missing
       IF ( FATAL ) CALL HMSCDG ( HPRTF(1:LP), ICODE )
+C HALO: the 1970s executable given an MSC deck fails on the first card
+C HALO:   of the executive control, with a message about field widths
+C HALO:   that is true and useless. Say what actually happened.
+      IF ( FATAL .AND. HASE .EQ. 0 .AND. HMSCDK .EQ. 1 ) THEN
+         CALL HMSG ( ' ' )
+         CALL HMSG ( 'nastran: this deck is written in MSC Nastran''s '
+     &      // 'dialect (SOL 1xx, INCLUDE, free-field cards).' )
+         CALL HMSG ( '         nastran95.exe reads only the 1970s '
+     &      // 'input NASA wrote it for; run the same deck with' )
+         CALL HMSG ( '         nastran95ase.exe, which translates the '
+     &      // 'MSC dialect and writes MSC-layout output.' )
+      ENDIF
 40    CONTINUE
       ICODE = 0
       IF ( .NOT. ENDED ) ICODE = 2
@@ -132,6 +161,14 @@ C HALO:   run of asterisks on the line is tried.
       CHARACTER*(*) LINE
       INTEGER       K, M, L, J
       HFATAL = .FALSE.
+C HALO: the solver's file system (GINO) stops the run without a
+C HALO:   numbered message: "I/O SUBSYSTEM ERROR NUMBER nnn". It is a
+C HALO:   fatal in every sense that matters - nothing after it is
+C HALO:   solved, END OF JOB still prints - so count it as one.
+      IF ( INDEX ( LINE, 'I/O SUBSYSTEM ERROR' ) .GT. 0 ) THEN
+         HFATAL = .TRUE.
+         RETURN
+      ENDIF
       L = LEN ( LINE )
       K = 1
 10    J = INDEX ( LINE(K:L), '***' )

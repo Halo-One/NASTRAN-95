@@ -47,11 +47,11 @@ C HALO: register HATEXT to run when the process exits.
 C HALO: the handler itself. See the header of this file. Messages go out
 C HALO:   through HMSG (the C runtime), not Fortran unit 0: see hoswin.f.
       INCLUDE 'HSTATE.COM'
-      CHARACTER*160   LINE
+      CHARACTER*160   LINE, SLINE
       CHARACTER*640   MSG
       CHARACTER*5     EXT(5)
-      LOGICAL         ENDED, FATAL, THERE, HFATAL, FEWER, NOMAS
-      INTEGER         I, ICODE, ISZ, LS, LO, LP
+      LOGICAL         ENDED, FATAL, THERE, HFATAL, FEWER, NOMAS, NOMASM
+      INTEGER         I, ICODE, ISZ, LS, LO, LP, LQ
       DATA            EXT / '.pch ', '.plt ', '.dic ', '.nptp',
      &                        '.sof ' /
 C
@@ -92,21 +92,40 @@ C     read the print file back for the verdict
 C
       ENDED = .FALSE.
       FATAL = .FALSE.
-      FEWER = .FALSE.
-      NOMAS = .FALSE.
+      FEWER  = .FALSE.
+      NOMAS  = .FALSE.
+      NOMASM = .FALSE.
       OPEN ( 98, FILE = HPRTF(1:LP), STATUS = 'OLD', ERR = 40 )
 30    READ ( 98, '(A)', END = 35, ERR = 35 ) LINE
-      IF ( INDEX ( LINE, 'END OF JOB' ) .GT. 0 ) ENDED = .TRUE.
-      IF ( HFATAL ( LINE ) ) FATAL = .TRUE.
+C HALO: the solver spells its messages two ways. Most modules write
+C HALO:   '*** USER FATAL MESSAGE nnnn, text' through WRTMSG; the ones
+C HALO:   that go through mis/msgwrt.f pad each word into a field of its
+C HALO:   own and write '*** USER FATAL    MESSAGE  nnnn' with the text
+C HALO:   on the next line. Every test below was written against the
+C HALO:   first spelling, so a run whose only fatal was of the second
+C HALO:   kind (a GRAV load with no mass anywhere is one: UFM 3056)
+C HALO:   printed the success line and exited 0. Squeeze the runs of
+C HALO:   blanks out of a copy and match on that, so both spellings and
+C HALO:   any future one are read alike.
+      CALL HSQZ ( LINE, SLINE, LQ )
+      IF ( INDEX ( SLINE(1:LQ), 'END OF JOB' ) .GT. 0 ) ENDED = .TRUE.
+      IF ( HFATAL ( SLINE(1:LQ) ) ) FATAL = .TRUE.
 C HALO: two warnings worth repeating on the terminal: the eigensolver
 C HALO:   found fewer modes than the deck asked for (2390), and why it
 C HALO:   usually did (2394, a mass matrix that is singular along some
 C HALO:   directions). A run that ends 0 with 87 of 120 modes is not
 C HALO:   the run the user meant.
-      IF ( INDEX ( LINE, 'WARNING MESSAGE 2390' ) .GT. 0 )
+      IF ( INDEX ( SLINE(1:LQ), 'WARNING MESSAGE 2390' ) .GT. 0 )
      &   FEWER = .TRUE.
-      IF ( INDEX ( LINE, 'WARNING MESSAGE 2394' ) .GT. 0 )
+      IF ( INDEX ( SLINE(1:LQ), 'WARNING MESSAGE 2394' ) .GT. 0 )
      &   NOMAS = .TRUE.
+C HALO: a rigid format that needs a mass matrix and has none stops in
+C HALO:   its own DMAP check, which prints no numbered message at all
+C HALO:   and lets the job end normally: END OF JOB, exit 0, and no
+C HALO:   eigenvalue table. Nothing else would tell the user that the
+C HALO:   run they are about to read produced nothing.
+      IF ( INDEX ( SLINE(1:LQ), 'MASS MATRIX REQUIRED' ) .GT. 0 )
+     &   NOMASM = .TRUE.
       GO TO 30
 35    CLOSE ( 98 )
       IF ( FEWER ) CALL HMSG ( 'nastran: fewer modes than requested '
@@ -115,6 +134,12 @@ C HALO:   the run the user meant.
      &   // 'or indefinite along some directions (UWM 2394): lumped' )
       IF ( NOMAS ) CALL HMSG ( '         masses without rotary '
      &   // 'inertia do this. The modes found are still valid.' )
+      IF ( NOMASM ) CALL HMSG ( 'nastran: this solution needs a mass '
+     &   // 'matrix and the model has none, so it stopped with' )
+      IF ( NOMASM ) CALL HMSG ( '         no results (MASS MATRIX '
+     &   // 'REQUIRED in the print file). Give the MAT1 cards a' )
+      IF ( NOMASM ) CALL HMSG ( '         density in field 6, or add '
+     &   // 'CONM2 cards, or NSM on the property cards.' )
 C HALO: the message itself, and what it means, on the terminal --
 C HALO:   nobody should have to open the print file to learn that a
 C HALO:   grid was missing
@@ -154,10 +179,42 @@ C HALO:   that is true and useless. Say what actually happened.
       CALL HEXIT ( ICODE )
       RETURN
       END
+      SUBROUTINE HSQZ ( LINE, OUT, LOUT )
+C HALO: copy LINE to OUT with every run of blanks collapsed to one, so
+C HALO:   that a test written for one spelling of a message reads every
+C HALO:   spelling of it (a trailing run becomes one blank). LOUT is the
+C HALO:   length used, at least 1 (a blank line gives one blank).
+      CHARACTER*(*) LINE, OUT
+      INTEGER       LOUT, I, L, M
+      LOGICAL       WASBLK
+      L      = LEN ( LINE )
+      M      = LEN ( OUT )
+      LOUT   = 0
+      WASBLK = .FALSE.
+      DO 10 I = 1, L
+      IF ( LINE(I:I) .EQ. ' ' ) THEN
+         IF ( WASBLK ) GO TO 10
+         WASBLK = .TRUE.
+      ELSE
+         WASBLK = .FALSE.
+      ENDIF
+      IF ( LOUT .GE. M ) GO TO 20
+      LOUT = LOUT + 1
+      OUT(LOUT:LOUT) = LINE(I:I)
+10    CONTINUE
+20    IF ( LOUT .EQ. 0 ) THEN
+         LOUT   = 1
+         OUT(1:1) = ' '
+      ENDIF
+      RETURN
+      END
       LOGICAL FUNCTION HFATAL ( LINE )
 C HALO: does this print line announce a fatal message: '***', blanks,
 C HALO:   then 'USER FATAL MESSAGE' or 'SYSTEM FATAL MESSAGE'. Every
-C HALO:   run of asterisks on the line is tried.
+C HALO:   run of asterisks on the line is tried. The caller passes a line
+C HALO:   whose runs of blanks HSQZ has already collapsed to one, so the
+C HALO:   spaced spelling mis/msgwrt.f writes is matched by these same
+C HALO:   two literals.
       CHARACTER*(*) LINE
       INTEGER       K, M, L, J
       HFATAL = .FALSE.

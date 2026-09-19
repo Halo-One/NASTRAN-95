@@ -232,6 +232,84 @@ buffering turned off:
   `nastran95ase` instead.
 * **`msc/mscdiag.c`.** Entries for `2386`, `2391` and `2395`.
 
+## The fatal messages: a spelling the verdict missed, and a catalogue audit
+
+Two things were wrong with the way a run reports that it failed.
+
+**A fatal in the other spelling was not a fatal at all.** The solver writes its
+numbered messages through two routines. Most modules use `WRTMSG`, which writes
+`*** USER FATAL MESSAGE 3097, SYMMETRIC DECOMPOSITION ...` with the text on the
+same line. The rest go through `mis/msgwrt.f`, whose formats 2000 and 2001 pad
+each word into a field of its own and write `*** USER FATAL    MESSAGE  3056`
+with the text on the next line. `HFATAL` in `mds/hexit.f` compared a fixed
+18-character literal and `msc_diag` used `strstr(line, "FATAL MESSAGE")`, so both
+saw the first spelling and neither saw the second. **A run whose only fatal was
+of the second kind printed the success line and exited 0.**
+
+A statics deck with a `GRAV` load and no mass anywhere is one: its single fatal
+is `UFM 3056, NO MASS MATRIX IS PRESENT BUT MASS DATA IS REQUIRED`, spaced. So is
+a run that exhausts open core (`SFM 3008`), which is why the `-8` entry never
+appeared, and so are `3005` and `3037` when they arrive first, which is why those
+two entries could never be reached either. Both places now collapse the runs of
+blanks in a copy of the line before matching (`HSQZ` in `mds/hexit.f`,
+`squeeze()` in `msc/mscdiag.c`), so every spelling of a message reads alike; the
+same copy feeds the `UWM 2390` and `2394` notices and the number lookup. The two
+scanners were also made to agree on what a fatal is (asterisks, then `USER` or
+`SYSTEM`, then `FATAL MESSAGE`): `msc_diag` used to accept `*** USER POTENTIALLY
+FATAL MESSAGE`, a note eight of NASA's demonstration decks print and run past.
+
+All 132 NASA demonstration decks were run before and after. The new rule flags
+exactly the 18 decks recorded as `fatal` in `NASTRAN/test/demo_expectations.txt`;
+the old one flagged 17, missing `t01231a`, whose only fatal is a spaced `3037`.
+No recorded verdict moves, because the MATLAB test matched fatals with a
+whitespace-tolerant regular expression all along. Only the executables were wrong.
+
+**A rigid format that needs a mass matrix and has none** stops in its own DMAP
+check, which prints no numbered message and lets the job end normally: `END OF
+JOB`, exit 0, and no eigenvalue table. The exit handler now says so on the
+terminal, next to the `2390` and `2394` notices. The exit code is left alone.
+
+**The catalogue was audited against the manual, the source and the solver.**
+Every entry was checked against `um/MSSG.TXT`, against the routine that emits the
+message, and, where a deck could provoke it, against a run. What that found:
+
+* `305` was the entry for an unknown card name. The solver prints `UFM 307,
+  ILLEGAL NAME FOR BULK DATA CARD CBEAM` for that; `305` is a **system** fatal
+  from `mis/ifp.f:172`, `IFP CANNOT OPEN GINO FILE`. So the commonest mistake in
+  a hand-written deck was answered with "no explanation on file". Re-keyed to
+  `307`, and the card list in its text corrected: NASTRAN-95 does have `CQUAD4`
+  and `CTRIA3`; what it lacks is `CBEAM`, `CBUSH`, `RBAR`, `RBE2`, `EIGRL` and
+  `PBARL`.
+* `2015` could never fire. It is a **warning** (`mis/usrmsg.f:94`, and the manual
+  says "a warning only"), and the explainer runs on fatals. The condition it
+  described reaches the user as `UFM 3097`, which the catalogue already answers
+  with the same advice. Deleted.
+* `2140A` is the warning; the fatal that follows it is `2140B`. Re-keyed.
+* `3097` said the stiffness matrix. `GIV` and `MGIV` factor the **mass** matrix,
+  so the same message arrives on data block `MAA` when the rotations are
+  massless, and the cure there is the opposite of constraining them. Its fix also
+  said `nastran95` cannot constrain singular freedoms itself. It can:
+  `PARAM AUTOSPC 1` prints `UIM 2435` and the `SPC1` cards it generated. What
+  NASTRAN-95 lacks is MSC's `PARAM,AUTOSPC,YES` spelling.
+* `3037` is not the bandwidth resequencer running out of scratch. It is the
+  generic `JOB TERMINATED IN SUBROUTINE ****` that about a hundred routines call
+  after printing their own reason, so the text now says to read the message above
+  it first, and keeps `BANDIT` as the example it is.
+* `300`, `311`, `316`, `505`, `615`, `2050`, `2101A`, `3005`, `3031`, `2386`,
+  `2395`, `6206` and the `GINO` and `-8` entries each had a sentence a run
+  disproved: the real-needs-a-decimal-point advice on `300` belongs to `315`, the
+  unique-ids advice on `311` is not true of load and constraint sets, the
+  continuation clause on `316` belongs to `209`, and so on.
+
+Twenty-one entries were added for messages a deck of this kind actually meets,
+each one provoked by a deck before it was written: `307`, `313`, `315`, `340`,
+`507`, `617` (card and control errors), `2007`, `2010`, `2053`, `2192`, `2200`,
+`2215`, `2423` (missing grids, properties, materials and constraint sets, a
+`SUPORT` direction with no mass, a freedom made dependent twice), `3008`, `3032`,
+`3056` (out of core, a missing `EIGR` set, a `GRAV` with no mass) and `3118`,
+`3145`, `3147`, `3176`, `3178`, `3179` (zero-length elements, constraint
+components, load-set combinations). The catalogue holds 41 entries.
+
 ## The four "unstable" demonstration decks, and the libgfortran defect behind them
 
 NASA's d03021a, d03031a, d07021a and d07022a (gas in a spherical tank, liquid in

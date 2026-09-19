@@ -273,6 +273,29 @@ Checked by running the four decks at twelve environment sizes from 0 to 20,000
 characters: 48 of 48 complete and match NASA, where the unwrapped executable
 failed 4 of 36.
 
+Why only those four decks, when the whole tree builds formats this way: this
+build runs as machine type 7 (`mds/btstrp.f`), for which `OFPPNT` never takes
+its `WRITE (L,FMT,...)` branch (machine types 2, 5 and 21 only) and prints every
+other output table line through `FORWRT` (`mds/forwrt.f`), NASTRAN's own format
+interpreter. The SORT-1 fluid harmonic-point line at `OFP` labels 1800-1960 is
+the one `WRITE` in the solver that hands the 1,200-byte zero-padded array to
+libgfortran, and only `AXIF`/`CFLUID` decks reach it. `WRTMSG` (`mis/wrtmsg.f`,
+`WRITE (MO,FOR)` with `INTEGER FOR(100)`, every user message) and `TABLE5`
+(`mis/table5.f`, `CHARACTER*10 FMT(30)`) are the same class and were one heap
+layout away from the same fault; the wrapper covers them too. A second
+libgfortran hazard in the same code, `format_error` writing
+`format_len - format_string_len` spaces into a 300-byte stack buffer, also goes
+away once the two lengths agree.
+
+An 80-line stand-alone reproducer (OFP's declarations, its format builder and
+the two `WRITE`s, run at a sweep of environment sizes) crashes with the pinned
+toolchain and does not with the wrapper or with `DATA FMT/300*4H    /`. The
+web has nothing on it: no issue or pull request on `nasa/NASTRAN-95`, no fork,
+no distribution patch, no GCC bug report. The nearest prior art is GCC's 2013
+fix for PR56737, whose `xmalloc`+`memcpy` copy was later replaced by the
+`strndup` that does this (present from GCC 5.5). It is worth a GCC bug report
+with that reproducer.
+
 ### What the front end is checked against
 
 Everything above is verified against MSC Nastran 2025.1 on the same decks, in

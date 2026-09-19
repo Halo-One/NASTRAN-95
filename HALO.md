@@ -232,6 +232,47 @@ buffering turned off:
   `nastran95ase` instead.
 * **`msc/mscdiag.c`.** Entries for `2386`, `2391` and `2395`.
 
+## The four "unstable" demonstration decks, and the libgfortran defect behind them
+
+NASA's d03021a, d03031a, d07021a and d07022a (gas in a spherical tank, liquid in
+a half-filled sphere, a gas-filled thin cylinder: the `AXIF`/`CFLUID` fluid
+elements) either completed and matched NASA's 1995 print file or died with
+SIGSEGV, and which one happened depended on the process's memory layout: the
+same executable, deck and scratch path flipped with the size of the environment
+block, between a shell and MATLAB's `system()`, and never under a debugger. It
+was recorded as memory corruption in the fluid-element code path. It is not.
+
+With `_NO_DEBUG_HEAP=1` gdb reproduces it, and the fault is inside libgfortran's
+`parse_format`, called from `mis/ofp.f` line 1031: the run-time-format `WRITE` of
+the SORT-1 fluid harmonic-point line. NASTRAN builds that format, like many
+others, in an `INTEGER FMT(300)` array of Hollerith words and hands the array to
+`WRITE` as the format. gfortran accepts the extension and passes the runtime the
+array's storage as a 1,200-byte string, of which the format text is the first
+hundred or two and the rest is zeros (the array is static, in `.bss`, and never
+written past the closing parenthesis).
+
+libgfortran (`io/format.c`) copies that string with `fc_strdup_notrim`, which is
+`strndup` (`runtime/string.c`): it stops at the first NUL, so the copy is a few
+hundred bytes. `dtp->format_len` stays at 1,200. `save_parsed_format` then runs
+`format_hash` over the short copy for 1,200 bytes, reading up to a kilobyte past
+the end of a small heap block. Whether that read crosses into an unmapped page
+depends on where `malloc` put the block, which depends on everything allocated
+before it, the environment block included. That is the whole of the symptom.
+The defect is in GCC 15 and on trunk; nothing in NASA's code is wrong by the
+standard of the extension it uses, and every run-time format in a zero-filled
+array in this tree was one heap layout away from the same crash.
+
+The fix is `msc/mscgfwrap.c`, linked into each executable with
+`-Wl,--wrap=_gfortrani_fc_strdup_notrim` (`CMakeLists.txt`): a copy of the full
+`src_len` bytes, NUL-terminated. The parser still stops at the parenthesis it
+always stopped at, the cache comparison (`strncmp`) is unchanged, and the hash
+stays in bounds. The wrapper object is on each executable's own source list
+rather than in the library, because the reference to `__wrap_` only appears when
+the linker reaches `libgfortran.a`, after it has finished with `libnas.a`.
+Checked by running the four decks at twelve environment sizes from 0 to 20,000
+characters: 48 of 48 complete and match NASA, where the unwrapped executable
+failed 4 of 36.
+
 ### What the front end is checked against
 
 Everything above is verified against MSC Nastran 2025.1 on the same decks, in

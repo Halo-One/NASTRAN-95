@@ -123,6 +123,10 @@ endif()
 # handling and lookup tables, and because a CHARACTER in fixed-form Fortran
 # is a blank-padded fixed-length thing that fights every line of it.
 file(GLOB MSC_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/msc/*.c")
+# mscgfwrap.c is linked into each executable directly, not through the
+# library: the reference to its __wrap_ symbol only appears when the linker
+# reaches libgfortran, after it has finished with this library.
+list(REMOVE_ITEM MSC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/msc/mscgfwrap.c")
 set_source_files_properties(${MSC_SOURCES} PROPERTIES LANGUAGE C)
 
 # The main program is generated so open core can be a build option. The
@@ -199,12 +203,14 @@ target_compile_options(nas PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra>)
 # Block data are only linked in if something references them, and nothing
 # does -- they exist to initialise COMMON. Naming the objects on the
 # executable's own source list is the portable way to force them in.
-add_executable(nastran "${CMAKE_CURRENT_BINARY_DIR}/nastrn.f" ${BD_SOURCES})
+add_executable(nastran "${CMAKE_CURRENT_BINARY_DIR}/nastrn.f" ${BD_SOURCES}
+                       "${CMAKE_CURRENT_SOURCE_DIR}/msc/mscgfwrap.c")
 target_compile_options(nastran PRIVATE ${NASTRAN_FLAGS})
 target_link_libraries(nastran PRIVATE nas)
 
 # nastran95ase: the same solver reading the MSC dialect.
-add_executable(nastranase "${CMAKE_CURRENT_BINARY_DIR}/nastrnase.f" ${BD_SOURCES})
+add_executable(nastranase "${CMAKE_CURRENT_BINARY_DIR}/nastrnase.f" ${BD_SOURCES}
+                          "${CMAKE_CURRENT_SOURCE_DIR}/msc/mscgfwrap.c")
 target_compile_options(nastranase PRIVATE ${NASTRAN_FLAGS})
 target_link_libraries(nastranase PRIVATE nas)
 set_target_properties(nastranase PROPERTIES OUTPUT_NAME "nastran95ase")
@@ -215,7 +221,8 @@ target_compile_options(nasthelp PRIVATE ${NASTRAN_FLAGS})
 add_executable(nastplot "${CMAKE_CURRENT_SOURCE_DIR}/utility/nastplot.f")
 target_compile_options(nastplot PRIVATE ${NASTRAN_FLAGS})
 
-add_executable(ff "${CMAKE_CURRENT_SOURCE_DIR}/utility/ff.f")
+add_executable(ff "${CMAKE_CURRENT_SOURCE_DIR}/utility/ff.f"
+                  "${CMAKE_CURRENT_SOURCE_DIR}/msc/mscgfwrap.c")
 target_compile_options(ff PRIVATE ${NASTRAN_FLAGS})
 target_link_libraries(ff PRIVATE nas)
 
@@ -249,6 +256,21 @@ if(NASTRAN_STATIC_RUNTIME AND CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   foreach(target nastran nastranase nasthelp nastplot ff chkfil hrfgen)
     target_link_options(${target} PRIVATE
                         -static -static-libgfortran -static-libgcc)
+  endforeach()
+endif()
+
+# --- the libgfortran format-copy workaround ---------------------------------
+# libgfortran copies a run-time format string with strndup and then hashes
+# the copy for the format's full declared length. NASTRAN's formats are
+# built in zero-filled INTEGER arrays, so the copy is short and the hash
+# reads past it - a crash or not depending on where the heap block landed
+# (NASA demos d03021a, d03031a, d07021a, d07022a). msc/mscgfwrap.c is a
+# full-length copy; --wrap routes the runtime's own calls to it. Every
+# executable that links the library (which holds msc/) gets it.
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  foreach(target nastran nastranase ff)
+    target_link_options(${target} PRIVATE
+                        "-Wl,--wrap=_gfortrani_fc_strdup_notrim")
   endforeach()
 endif()
 

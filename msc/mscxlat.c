@@ -59,6 +59,8 @@ typedef struct {
     int        nmodes;
     double     shift;
     int        have_eig;
+    int        pkmatch;   /* the deck carries PARAM PKMATCH itself           */
+    int        pkmatch_written; /* PARAM PKMATCH 1 already emitted for a PKNL */
     int        fatal;
 } msc_ctx;
 
@@ -574,8 +576,13 @@ static void do_eigc(msc_ctx *x, msc_card *c)
 }
 
 /* FLUTTER SID METHOD DENS MACH RFREQ IMETH NVALUE EPS: NASTRAN-95 knows
- * K, KE, PK and, in this fork, MSC's PKNL (matched points: the three
- * FLFACT lists walked together). Its IMETH is S (surface) or L (linear)
+ * K, KE and PK. MSC's PKNL (matched points: the three FLFACT lists walked
+ * together, entry by entry) is written as PK with PARAM PKMATCH 1, this
+ * fork's parameter, which the AERO 10 rigid format hands to FA1 and FA1
+ * then builds the loop list from the lists side by side. So the solved
+ * deck is spelled with the method every NASTRAN has, and a deck written
+ * that way to begin with passes through. Its IMETH is S (surface) or L
+ * (linear)
  * spline interpolation of the aerodynamics in k; MSC's TCUB and the
  * others become L, which is what its PK method uses anyway.           */
 static void do_flutter(msc_ctx *x, msc_card *c)
@@ -584,6 +591,23 @@ static void do_flutter(msc_ctx *x, msc_card *c)
     int  i;
     msc_card *o = emit(x, "FLUTTER");
     for (i = 1; i <= c->nfld; i++) msc_set(o, i, msc_f(c, i));
+    strncpy(m, msc_f(c, 2), sizeof(m) - 1);
+    m[sizeof(m) - 1] = '\0';
+    msc_upper(m);
+    if (msc_streq(m, "PKNL")) {
+        msc_set(o, 2, "PK");
+        if (!x->pkmatch && !x->pkmatch_written) {
+            msc_card *p = emit(x, "PARAM");
+            msc_set(p, 1, "PKMATCH");
+            msc_seti(p, 2, 1);
+            x->pkmatch_written = 1;
+        }
+        msc_msg(MSC_INFO, 9123,
+            "FLUTTER %s: PKNL became PK with PARAM PKMATCH 1 - NASTRAN-95's PK\n"
+            "on matched points, the density, Mach and velocity lists walked\n"
+            "together entry by entry as PKNL does, not every combination.",
+            msc_f(c, 1));
+    }
     strncpy(m, msc_f(c, 6), sizeof(m) - 1);
     m[sizeof(m) - 1] = '\0';
     msc_upper(m);
@@ -643,6 +667,12 @@ static void do_param(msc_ctx *x, msc_card *c)
         msc_streq(n, "HFREQ")   || msc_streq(n, "MAXRATIO") ||
         msc_streq(n, "Q")       || msc_streq(n, "MACH")     ||
         msc_streq(n, "KDAMP")   || msc_streq(n, "IFTM")) {
+        pass_through(x, c);
+        return;
+    }
+    /* PKMATCH (this fork's): PK on matched points, read by FA1 through
+     * the AERO 10 rigid format                                        */
+    if (msc_streq(n, "PKMATCH")) {
         pass_through(x, c);
         return;
     }
@@ -962,6 +992,21 @@ static void renumber_pass(msc_ctx *x)
 static void translate_bulk(msc_ctx *x)
 {
     int i;
+
+    /* a deck that carries PARAM,PKMATCH itself needs no second one when
+     * a PKNL set is rewritten                                          */
+    x->pkmatch = 0;
+    x->pkmatch_written = 0;
+    for (i = 0; i < x->d->nbulk; i++) {
+        msc_card *c = &x->d->bulk[i];
+        char pn[MSC_FLDLEN];
+        if (!msc_streq(c->name, "PARAM")) continue;
+        strncpy(pn, msc_f(c, 1), sizeof(pn) - 1);
+        pn[sizeof(pn) - 1] = '\0';
+        msc_upper(pn);
+        if (msc_streq(pn, "PKMATCH") && msc_fi(c, 2, 0) != 0) x->pkmatch = 1;
+    }
+
     for (i = 0; i < x->d->nbulk; i++) {
         msc_card   *c = &x->d->bulk[i];
         const char *n = c->name;

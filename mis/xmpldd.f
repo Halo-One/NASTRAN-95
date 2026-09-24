@@ -28,27 +28,27 @@ C
       REAL             X(2,20)
       DOUBLE PRECISION XX(20)    , XXX(20)
       DIMENSION        MPL01( 68), MPL02(161), MPL03(135), MPL04(152),
-     5                 MPL05(138), MPL06(162), MPL07(200), MPL08(137),
+     5                 MPL05(140), MPL06(162), MPL07(200), MPL08(137),
      9                 MPL09(173), MPL10( 93), MPL11(116), MPL12(135),
      3                 MPL13(150), MPL14(151), MPL15(135), MPL16( 53),
      7                 MPL17(144), MPL18(169), MPL19(193), MPL20(186),
-     1                 MPL21(196), MPL22(119), MPL( 3166)
-      COMMON /XGPI2 /  LMPL, MPLPNT    , IMP( 3166)
+     1                 MPL21(196), MPL22(119), MPL( 3168)
+      COMMON /XGPI2 /  LMPL, MPLPNT    , IMP( 3168)
       COMMON /XGPI2X/  XXX
       EQUIVALENCE      (XX(1),X(1,1))
       EQUIVALENCE      (MPL(   1),MPL01(1)) ,(MPL(  69),MPL02(1)) ,
      3                 (MPL( 230),MPL03(1)) ,(MPL( 365),MPL04(1)) ,
-     5                 (MPL( 517),MPL05(1)) ,(MPL( 655),MPL06(1)) ,
-     7                 (MPL( 817),MPL07(1)) ,(MPL(1017),MPL08(1)) ,
-     9                 (MPL(1154),MPL09(1)) ,(MPL(1327),MPL10(1)) ,
-     1                 (MPL(1420),MPL11(1)) ,(MPL(1536),MPL12(1)) ,
-     3                 (MPL(1671),MPL13(1)) ,(MPL(1821),MPL14(1)) ,
-     5                 (MPL(1972),MPL15(1)) ,(MPL(2107),MPL16(1)) ,
-     7                 (MPL(2160),MPL17(1)) ,(MPL(2304),MPL18(1)) ,
-     9                 (MPL(2473),MPL19(1)) ,(MPL(2666),MPL20(1)) ,
-     1                 (MPL(2852),MPL21(1)) ,(MPL(3048),MPL22(1))
+     5                 (MPL( 517),MPL05(1)) ,(MPL( 657),MPL06(1)) ,
+     7                 (MPL( 819),MPL07(1)) ,(MPL(1019),MPL08(1)) ,
+     9                 (MPL(1156),MPL09(1)) ,(MPL(1329),MPL10(1)) ,
+     1                 (MPL(1422),MPL11(1)) ,(MPL(1538),MPL12(1)) ,
+     3                 (MPL(1673),MPL13(1)) ,(MPL(1823),MPL14(1)) ,
+     5                 (MPL(1974),MPL15(1)) ,(MPL(2109),MPL16(1)) ,
+     7                 (MPL(2162),MPL17(1)) ,(MPL(2306),MPL18(1)) ,
+     9                 (MPL(2475),MPL19(1)) ,(MPL(2668),MPL20(1)) ,
+     1                 (MPL(2854),MPL21(1)) ,(MPL(3050),MPL22(1))
 C
-      DATA    LMPLX          /    3166      /
+      DATA    LMPLX          /    3168      /
 C
       DATA    X(1,1)         /    -1.0      /
       DATA    XX(2)          /    -1.0D+0   /
@@ -152,7 +152,7 @@ C
      *                               ,  1,-1, 1,-1, 1,-1, 1,-1, 1,-1
      *                               ,  1,-1, 1,-1, 1,-1, 1,-1, 1,-1
      *                               ,  1,-1, 2, 9, 2, 9
-     3, 11, 4HFA1 ,4H    , 1, 6, 4, 6,  2*-1, 1, 0
+     3, 13, 4HFA1 ,4H    , 1, 6, 4, 6,  2*-1, 1, 0, 1, 0
      4, 12, 4HFA2 ,4H    , 1, 3, 4, 0, -1,-2, 3, 4HYES   ,4H     ,
      5  15, 4HFBS ,4H    , 1, 3, 1, 1,  1, 0, 1, 1, 1, 0, 1, 0
      6, 13, 4HFRLG,4H    , 1, 8, 5, 4, -3, 1,-1, 3, 4HFREQ,4H    ,

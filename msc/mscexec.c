@@ -87,7 +87,9 @@ static const char *case_keep[] = {
     "TITLE", "SUBTITLE", "SUBTITL", "LABEL", "ECHO", "MAXLINES", "LINES",
     "SPC", "MPC", "LOAD", "DEFORM", "TEMPERATURE", "TEMP",
     "METHOD", "CMETHOD", "FMETHOD", "SDAMPING", "FREQUENCY", "TSTEP",
-    "DLOAD", "IC", "NONLINEAR", "GUST",
+    "DLOAD", "IC", "NONLINEAR", "GUST", "RANDOM", "SDISPLACEMENT",
+    "XYPRINT", "XYPLOT", "XYPEAK", "XYPAPLOT", "XTITLE", "YTITLE",
+    "XAXIS", "YAXIS", "XGRID", "YGRID", "TCURVE", "CURVELINESYMBOL",
     "DISPLACEMENT", "VELOCITY", "ACCELERATION", "SPCFORCES", "OLOAD",
     "STRESS", "ELFORCE", "FORCE", "SET", "SUBCASE", "SUBCOM",
     "SUBSEQ", "SYMMETRY", "REPCASE", "OUTPUT", "AXISYMMETRIC",
@@ -227,6 +229,29 @@ void msc_case_write(FILE *fp, msc_deck *d, int *spc_sel, int *method_sel,
         if (msc_streq(name, "SPC")   && suppress_spc)   continue;
         if (msc_streq(name, "TITLE") && suppress_title) continue;
 
+        /* the XY output requests are the 1970s solver's own language
+         * (XYPRINT DISP PSDF / 12(T3)) and go through as written, as does
+         * OUTPUT(XYPLOT) / OUTPUT(XYOUT) that opens them                 */
+        if (strncmp(name, "XY", 2) == 0 || msc_streq(name, "XTITLE") ||
+            msc_streq(name, "YTITLE") || msc_streq(name, "XAXIS") ||
+            msc_streq(name, "YAXIS") || msc_streq(name, "XGRID") ||
+            msc_streq(name, "YGRID") || msc_streq(name, "TCURVE") ||
+            msc_streq(name, "CURVELINESYMBOL")) {
+            const char *p = d->cases[i];
+            while (*p == ' ' || *p == '\t') p++;
+            fprintf(fp, "%s\n", p);
+            continue;
+        }
+        if (msc_streq(name, "OUTPUT") && opts[0]) {
+            char up[MSC_LINELEN];
+            strncpy(up, opts, sizeof(up) - 1);
+            up[sizeof(up) - 1] = '\0';
+            msc_upper(up);
+            if (strstr(up, "XY")) {
+                fprintf(fp, "OUTPUT(%s)\n", up);
+                continue;
+            }
+        }
         /* the parenthesised options are MSC's; SORT2 is the only one
          * the 1970s output has a form of, and it is spelled the same  */
         if (opts[0]) {

@@ -640,8 +640,22 @@ static void do_param(msc_ctx *x, msc_card *c)
         msc_streq(n, "GRDPNT")  || msc_streq(n, "G")        ||
         msc_streq(n, "W3")      || msc_streq(n, "W4")       ||
         msc_streq(n, "LMODES")  || msc_streq(n, "LFREQ")    ||
-        msc_streq(n, "HFREQ")   || msc_streq(n, "MAXRATIO")) {
+        msc_streq(n, "HFREQ")   || msc_streq(n, "MAXRATIO") ||
+        msc_streq(n, "Q")       || msc_streq(n, "MACH")     ||
+        msc_streq(n, "KDAMP")   || msc_streq(n, "IFTM")) {
         pass_through(x, c);
+        return;
+    }
+    /* GUSTAERO: the gust aerodynamics are computed for -1 in MSC and for
+     * +1 in NASTRAN-95 (the User's Manual's AERO 11: "+1 computes gust
+     * loads"), so the sign turns round                                  */
+    if (msc_streq(n, "GUSTAERO")) {
+        msc_card *o = emit(x, "PARAM");
+        int v = msc_fi(c, 2, 1);
+        msc_set(o, 1, "GUSTAERO");
+        msc_seti(o, 2, -v);
+        msc_msg(MSC_INFO, 9119, "PARAM GUSTAERO %d became %d: NASTRAN-95 computes the "
+                "gust aerodynamics for +1, MSC for -1.", v, -v);
         return;
     }
     /* the ones that only mean something to MSC: dropping them changes
@@ -724,6 +738,7 @@ static const char *copy_cards[] = {
     "TF", "TIC", "NOLIN1", "NOLIN2", "NOLIN3", "NOLIN4",
     "AERO", "AEROS", "CAERO1", "PAERO1", "SPLINE2", "SET1",
     "FLFACT", "MKAERO1", "MKAERO2", "TRIM", "AESTAT", "AESURF",
+    "GUST", "RANDPS", "TABRNDG", "TABRND1",
     "DMI", "DMIG",
     NULL
 };

@@ -86,7 +86,7 @@ int msc_sol_lookup(int sol, const char *name, const char **app, int *rf,
 static const char *case_keep[] = {
     "TITLE", "SUBTITLE", "SUBTITL", "LABEL", "ECHO", "MAXLINES", "LINES",
     "SPC", "MPC", "LOAD", "DEFORM", "TEMPERATURE", "TEMP",
-    "METHOD", "CMETHOD", "FMETHOD", "SDAMPING", "FREQUENCY", "TSTEP",
+    "METHOD", "CMETHOD", "FMETHOD", "SDAMPING", "FREQUENCY", "OFREQUENCY", "TSTEP",
     "DLOAD", "IC", "NONLINEAR", "GUST", "RANDOM",
     "XYPRINT", "XYPLOT", "XYPEAK", "XYPAPLOT", "XTITLE", "YTITLE",
     "XAXIS", "YAXIS", "XGRID", "YGRID", "TCURVE", "CURVELINESYMBOL",

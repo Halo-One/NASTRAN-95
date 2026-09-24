@@ -10,6 +10,11 @@
  * one the caller asked for, in subcase order, so that read_nastran_flutter
  * sees the subcases it would see from MSC.
  *
+ * Each child runs in a directory of its own, s<subcase> under the output
+ * directory: the solver keeps files under fixed names beside its print
+ * file (the checkpoint dictionary, the plot and 'none' files), and two
+ * children in one directory write over each other's and die in GP4.
+ *
  * Each subcase recomputes the modes and its own aerodynamics; nothing is
  * shared, because the aerodynamics depend on the mach anyway and the
  * solver has no way to hand a datablock from one process to another.
@@ -78,18 +83,19 @@ static int copy_file(FILE *to, const char *path)
     return 0;
 }
 
-/* translate subcase k into its own COSMIC deck and start the child that
- * solves it; the handle of the child, or NULL                          */
-static HANDLE start_child(const char *full, const char *exe, const char *child_stem,
-                          int k, int n, int id)
+/* translate subcase k into its own COSMIC deck, in its own directory, and
+ * start the child that solves it there; the handle of the child, or NULL */
+static HANDLE start_child(const char *full, const char *exe, const char *dir,
+                          const char *child_stem, int k, int n, int id)
 {
     msc_deck  d;
     msc_stats st;
-    char      deck[MSC_PATHLEN], q1[MSC_PATHLEN + 4];
+    char      deck[MSC_PATHLEN], q1[MSC_PATHLEN + 4], q2[MSC_PATHLEN + 4];
     int       at[FLUT_MAXSUB];
     intptr_t  h;
 
-    snprintf(deck, sizeof(deck), "%s.dat", child_stem);
+    _mkdir(dir);
+    snprintf(deck, sizeof(deck), "%s\\%s.dat", dir, child_stem);
     if (msc_read(full, &d)) return NULL;
     find_subcases(&d, at, FLUT_MAXSUB);
     keep_subcase(&d, at, n, k);
@@ -101,19 +107,20 @@ static HANDLE start_child(const char *full, const char *exe, const char *child_s
     msc_free(&d);
     if (k == 0) msc_tally_print();
     snprintf(q1, sizeof(q1), "\"%s\"", deck);
-    h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, ".", NULL);
+    snprintf(q2, sizeof(q2), "\"%s\"", dir);
+    h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, q2, NULL);
     if (h == -1) {
         msc_msg(MSC_FATAL, 9452, "could not start the child run for subcase %d: is %s runnable?", id, exe);
         return NULL;
     }
-    fprintf(stderr, "nastran: subcase %d -> %s.out (running)\n", id, child_stem);
+    fprintf(stderr, "nastran: subcase %d -> %s\\%s.out (running)\n", id, dir, child_stem);
     return (HANDLE) h;
 }
 
 int msc_sol145(const char *deck, const char *outdir, const char *stem)
 {
     char   exe[MAX_PATH], full[MAX_PATH], msg[MSC_PATHLEN];
-    char   child_stem[FLUT_MAXSUB][MSC_PATHLEN];
+    char   child_stem[FLUT_MAXSUB][MSC_PATHLEN], child_dir[FLUT_MAXSUB][32];
     int    at[FLUT_MAXSUB], id[FLUT_MAXSUB], code[FLUT_MAXSUB];
     HANDLE hproc[FLUT_MAXSUB];
     int    n, k, jobs, worst = 0, started = 0, done = 0, failed = 0;
@@ -140,6 +147,7 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
         id[k] = atoi(p + 7);
         if (id[k] <= 0) id[k] = k + 1;
         snprintf(child_stem[k], sizeof(child_stem[k]), "%s_s%d", stem, id[k]);
+        snprintf(child_dir[k], sizeof(child_dir[k]), "s%d", id[k]);
         code[k] = -1;
         hproc[k] = NULL;
     }
@@ -158,9 +166,9 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
     msc_msg(MSC_INFO, 9450,
         "SOL 145 with %d subcases, one FMETHOD each: NASTRAN-95 solves one per\n"
         "run, so each becomes a child run of this executable, %d at a time\n"
-        "(N95_JOBS sets it). Their print files are joined into %s.out in\n"
-        "subcase order; each child's own is %s_s<subcase>.out.",
-        n, jobs, stem, stem);
+        "(N95_JOBS sets it), in a directory of its own, s<subcase>. Their print\n"
+        "files are joined into %s.out in subcase order.",
+        n, jobs, stem);
 
     /* the children, jobs at a time, each translated as it starts */
     _putenv("N95_CHILD=1");
@@ -170,7 +178,8 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
         DWORD  w, ec = 0;
 
         while (started < n && started - done < jobs) {
-            hproc[started] = start_child(full, exe, child_stem[started], started, n, id[started]);
+            hproc[started] = start_child(full, exe, child_dir[started], child_stem[started],
+                                         started, n, id[started]);
             if (!hproc[started]) { code[started] = 3; done++; failed = 1; }
             started++;
         }
@@ -189,7 +198,8 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
         hproc[k] = NULL;
         code[k] = (int) ec;
         done++;
-        fprintf(stderr, "nastran: subcase %d -> %s.out (exit code %d)\n", id[k], child_stem[k], code[k]);
+        fprintf(stderr, "nastran: subcase %d -> %s\\%s.out (exit code %d)\n",
+                id[k], child_dir[k], child_stem[k], code[k]);
     }
 
     /* the joined print file, and the verdict */
@@ -200,7 +210,7 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
         out = fopen(prt, "wb");
         for (k = 0; k < n; k++) {
             char child_prt[MSC_PATHLEN];
-            snprintf(child_prt, sizeof(child_prt), "%s.out", child_stem[k]);
+            snprintf(child_prt, sizeof(child_prt), "%s\\%s.out", child_dir[k], child_stem[k]);
             if (code[k] > worst) worst = code[k];
             if (!out || copy_file(out, child_prt))
                 msc_msg(MSC_WARN, 9453, "subcase %d left no print file (%s, exit code %d).",

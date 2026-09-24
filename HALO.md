@@ -489,8 +489,9 @@ other solver jobs:
 |---|---|---|---|---|
 | -O0, NASA's AMPC | (in the 134 min) | (in the 134 min) | < 1 s | 134 min |
 | -O0 kernel, in-core solve, 4 threads | 14 min 49 s | 11 min 44 s | < 1 s | 26.7 min |
-| -O2 kernel, in-core solve, 8 threads | 8 min 45 s | RUN3AMP | < 1 s | RUN3TOTAL |
+| -O2 kernel, in-core solve, 8 threads | 8 min 45 s | 16 min 24 s (five other solver jobs on the machine) | < 1 s | 25.4 min |
 
+The two in-core runs agree with each other to every printed digit (800 root values).
 Checked: the NASA doublet-lattice demonstration decks d10021a, d10022a and
 d10023a (KE and PK on the 15-degree swept wing) through both paths agree in
 every flutter summary number to 1e-5 relative or better (the original path

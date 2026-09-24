@@ -392,3 +392,174 @@ error:
   `phi' M phi` against the identity.** A mass matrix with one spurious entry per
   empty degree of freedom still factors, still gives modes, and still looks like a
   mass matrix.
+
+## Flutter: matched points, the aerodynamic solve, threads, and what the g-method would take
+
+Branch `halo-ase-sol145`. NASA's AERO 10 rigid format (modal flutter) has three
+methods, K, KE and PK (User's Manual 1.11.4 and 3.20), and its PK loops over
+every combination of the density, Mach and velocity FLFACT lists - the inner
+loop is velocity - with a hard stop at 100 loops (Flutter Error 3). The decks
+Halo One writes for MSC / NX Nastran are matched-point analyses in the ZAERO
+FIXMATM sense: at a fixed Mach, one point per altitude of a standard-atmosphere
+list, density and true airspeed belonging together, which MSC and NX spell
+`FLUTTER ... PKNL`. Forty altitudes as a PK product would be 1,600 loops.
+
+### PKNL, and PK on matched points (`PARAM,PKMATCH,1`)
+
+What the branch changed, file by file, so that a stock PK becomes a matched
+point analysis:
+
+* `mis/ifs5p.f` - the IFP accepts a fifth method name, `PKNL`, on the FLUTTER
+  card (`MET(5)`), so an MSC deck can also be solved as written.
+* `mis/fa1.f` - FA1 builds the flutter loop list that FA2 and the DMAP loop
+  walk (records of `FSAVE`). For PK it wrote every (density, Mach, velocity)
+  combination; for a matched-point request it now writes one loop per entry
+  of the density and velocity lists taken together, the Mach list walked
+  alongside (its last entry repeated when it is shorter). Everything after
+  that - the PK iteration on each loop, `FA1PKE`, the convergence on k - is
+  NASA's PK untouched: a matched point is just a loop with its own density
+  and velocity. A ninth word in the `FSAVE` header (`REC0(9) = 1`) tells FA2
+  the run was matched.
+* `mis/fa2.f` - with that word set FA2 prints the flutter summary as MSC does:
+  one block per root, a row per matched point, DENSITY and MACH columns in
+  the row (COSMIC's own PK layout is one block per (Mach, density) group);
+  `read_nastran_flutter` in VehicleDesign reads both layouts.
+* `rf/AERO10` and `mis/fa1.f` again - the request comes in through a
+  parameter, not only through the spelling: `PARAM,PKMATCH,1` in the bulk
+  data is handed to FA1 by the rigid format (`FA1 .../S,N,NOCEAD/V,Y,PKMATCH=0`,
+  the fourth word of its `/BLANK/` common), and `FLUTTER ... PK` with it set
+  takes the matched path. So the deck NASTRAN-95 solves is spelled with the
+  method every NASTRAN has, plus one parameter that MSC and NX ignore.
+* `msc/mscxlat.c` - the front end writes MSC's `PKNL` as `PK` and emits
+  `PARAM PKMATCH 1` once; a deck that already says `PK` + `PKMATCH` passes
+  through. The translated deck (`<stem>_n95.dat`) is what to read when in
+  doubt.
+
+Why not make PK itself walk the lists when they have the same length: a user
+who wants the 3 x 3 product of three densities and three velocities would get
+three points and no warning. The parameter says what is meant.
+
+### Where the time went, and the in-core aerodynamic solve
+
+On the monarch (2,282 doublet-lattice boxes, 31 reduced frequencies per Mach)
+one Mach took 134 min in the -O0 build against 6.4 min in MSC. Profiling it
+needs care: the module log's CPU column is the process's *system* time
+(`mds/cputim.f` returns `ETIME`'s second element, as NASA shipped it; the
+fork kept that because a real clock would arm the `TIME` card's limit) and
+its wall-clock column is zero, so the only trustworthy profile is the log
+written unbuffered (`GFORTRAN_UNBUFFERED_ALL=y`) with its `BEGN`/`END` lines
+timed as they appear. Done that way on the reduced deck (Mach 0.10, 31 k,
+30 modes solved, 20 kept), two modules hold everything: AMG, the doublet
+lattice, and AMP, whose `AMPC` for each k transposed the AJJ matrix
+(`TRANP1`), decomposed the transpose out of core through GINO (`CFACTR`,
+the banded unsymmetric `CDCOMP` with scratch files and packed columns) and
+solved the NOH right-hand sides (`CFBSOR`). FA1/FA2, the PK iterations
+themselves, take under a second for 40 matched points.
+
+`mis/ampcz.f` (new) replaces the AMPC step when there is one theory group
+and the matrices fit in open core: AJJ is unpacked transposed into core as
+complex double precision (2,282 square is 83 MB, against the ASE
+executable's 48 million-word open core), factored in place with partial
+pivoting, the right hand sides solved, and QJH packed with the trailer
+`CFBSOR` would have left. `AMPC` calls it before the transpose and falls
+back to the original path when it declines (no core, a vanishing pivot, or
+`N95_INCORE_AJJ=0` in the environment, which is how the two paths are
+compared). It is compiled `-O2 -fautomatic -fopenmp` (see the CMake
+comment): new code with no static locals and no open-core aliasing of its
+own, so the reasons the rest of the tree stays at -O0 do not apply to it.
+The trailing update of the LU and the right-hand-side solves are OpenMP
+parallel loops; libgomp is linked statically like libgfortran (`-fopenmp`
+on the link line, not the imported target, which names `libgomp.dll.a`),
+and the SOL 145 driver gives each child `OMP_NUM_THREADS` = processors /
+children.
+
+The doublet lattice's own arithmetic - the kernel integrals `incro`, `tker`,
+`subp`, `subpb`, `idf1`, `idf2`, `snpdf`, `subi`, `akp2`, `asycon`, `suba`,
+`intert` and the D-matrix assembly `amgb1b`, `amgb1c`, `amgb1d` - is compiled
+at -O2 as well, with the tree's other flags unchanged. The drivers around
+them (`amg.f`, `amgb1.f`, `amgb1a.f`, `dlamg.f`, `dlamby.f`, `subph1.f`),
+which pack the matrices through GINO, were tried at -O2 and produced an
+unusable AJJ (a division by zero in the transpose that read it); they stay
+at -O0.
+
+Measured on the reduced deck, wall clock, on a machine already running
+other solver jobs:
+
+| build | AMG (doublet lattice) | AMP (31 solves) | FA1 + FA2 | total |
+|---|---|---|---|---|
+| -O0, NASA's AMPC | (in the 134 min) | (in the 134 min) | < 1 s | 134 min |
+| -O0 kernel, in-core solve, 4 threads | 14 min 49 s | 11 min 44 s | < 1 s | 26.7 min |
+| -O2 kernel, in-core solve, 8 threads | 8 min 45 s | RUN3AMP | < 1 s | RUN3TOTAL |
+
+Checked: the NASA doublet-lattice demonstration decks d10021a, d10022a and
+d10023a (KE and PK on the 15-degree swept wing) through both paths agree in
+every flutter summary number to 1e-5 relative or better (the original path
+works in single precision, the new one in double), the optimised kernel bit
+for bit with the -O0 one; d11031a (AERO 11 gust) and t09061a run unchanged.
+The reduced monarch deck's 30 modes agree with MSC's to every printed digit
+and its 40 matched points are MSC's; the roots themselves await an MSC or NX
+licence for `test_nastran95ase_flutter_vs_msc` (the first run of that test,
+before this work, agreed to three digits on the first flexible root).
+
+### Parallel processing, what pays and what does not
+
+* **Across subcases** (one per Mach): `msc/mscflut.c` runs one child process
+  per subcase, as many at a time as there are processors. This is the whole
+  gain available from process parallelism: every child recomputes the modes
+  and the full aerodynamic matrix set, so splitting finer - one child per
+  matched point - would repeat that forty times for seconds of PK iteration.
+* **Inside a subcase, across k**: the AMP loop over (Mach, k) pairs is
+  embarrassingly parallel in principle, but the module is written around one
+  open core and one set of GINO scratch files; threading it means threading
+  the in-core solve (done) rather than the module.
+* **Inside the solve**: the LU's trailing update is where the flops are
+  (2/3 n^3 complex, 6e10 flops per k on the monarch); it scales with threads
+  until memory bandwidth does not (the unblocked rank-1 update streams the
+  trailing matrix once per column). A blocked LU would roughly double the
+  rate again; not done.
+* **AMG next**: with the kernel optimised the doublet lattice is still the
+  largest single module. Its drivers at -O0 (the loops over boxes in
+  `amgb1a`/`amgb1`, and GINO packing of a 2.6 GB AJJL) are the remainder;
+  making them safe at -O2 means finding what they alias, one file at a time
+  (the demos d10021a-d10023a are the check).
+* **Not worth it**: -O2 on the whole tree (breaks the parser and the FEER
+  guards, see above); a per-point split of the flutter loop.
+
+### What the g-method would take
+
+ZAERO's g-method (Theoretical Manual 7.3; Chen, "Damping perturbation method
+for flutter solution: the g-method", AIAA J. 38(9), 2000) keeps the P-K
+equation's form but replaces the aerodynamic damping term Q_I/k with the
+derivative of the aerodynamic matrix along the imaginary axis, Q'(ik) =
+dQ/d(ik), which the Cauchy-Riemann conditions make equal to dQ/dg for an
+analytic Q(p). The flutter equation becomes a quadratic eigenproblem in the
+damping g (7.28): [g^2 A + g B + C]{q} = 0 with A = (V/L)^2 M, B = 2ik(V/L)^2 M
+- (rho V^2/2) Q'(ik) + (V/L) Z, C = -k^2 (V/L)^2 M + K - (rho V^2/2) Q(ik) +
+ik (V/L) Z, solved as a state-space eigenproblem [D - gI]{X} = 0 and swept in
+k from 0 to k_max; a root is a flutter root where Im(g) crosses zero, found
+by interpolation in k, with f = kV/(2 pi L) and the damping 2 Re(g)/k. A
+predictor-corrector on the eigenvalues (dg/dk from left and right
+eigenvectors, the step cut when the prediction misses) keeps the tracking
+honest.
+
+In NASTRAN-95 terms, all of it lives in FA1's PK branch:
+
+1. `Q'(ik)` per (Mach, k): central differences of the interpolated QHH over
+   the MKAERO1 k list (forward at k = 0), one more matrix per k alongside
+   QHHL - the interpolation FA1 already does (linear, `IMETH L`) supplies
+   Q(ik) at any k; its derivative is a second interpolation.
+2. A quadratic eigenproblem instead of PK's fixed-point iteration: linearise
+   to 2h x 2h and call the complex eigensolver the K method already uses
+   (`CEAD`, HESS) once per k of the sweep, not once per PK iteration - so
+   the DMAP loop structure (FA1 -> CEAD -> FA2 -> loop) fits as it is, with
+   the loop counter walking k instead of the FLFACT entries and FA2 given
+   the roots with Im(g) crossings marked.
+3. FA2: a summary per root of the sweep (k, V, g, f) in the MSC layout,
+   which the readers already parse; the ZAERO-style "extra" aerodynamic lag
+   roots appear naturally and need labelling.
+4. The card: a sixth FLUTTER method name (`G`), the sweep step as EPS or a
+   new field, the matched-point lists as for PKNL.
+
+The order of work is 1 then 2: without Q'(ik) the equation is PK's, and the
+sweep with a proper eigensolver is where the P-K fixed-point iteration's
+occasional wrong root goes away. Not started.

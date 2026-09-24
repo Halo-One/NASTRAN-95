@@ -452,7 +452,11 @@ C HALO:   and running out of it stops the job inside the decomposition
 C HALO:   rather than saying what was short. So nastran95ase gives the
 C HALO:   modules three quarters of it. Either can still be set in the
 C HALO:   environment, which is what the message below reports.
-      IF ( ASEMOD ) THEN
+C HALO:   A child of the SOL 145 driver (N95_CHILD in the environment)
+C HALO:   solves the same big model with --cosmic and gets the same
+C HALO:   split: on NASA's it ran out inside the decomposition.
+      CALL GETENV ( 'N95_CHILD', VALUE )
+      IF ( ASEMOD .OR. VALUE .NE. ' ' ) THEN
          CALL HDFLTI ( 'OCMEM', (LENOPC/4)*3, IOCMEM )
          CALL HDFLTI ( 'DBMEM', LENOPC/4,     IDBLEN )
       ELSE

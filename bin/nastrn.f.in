@@ -268,6 +268,17 @@ C HALO:   child processes and exits with their verdict
          ENDIF
          CALL EXIT ( IERR )
       ENDIF
+C HALO: SOL 145 with several subcases (one FMETHOD per mach): the
+C HALO:   flutter driver runs one child per subcase side by side and
+C HALO:   joins their print files; see msc/mscflut.c
+      IF ( IERR .EQ. 145 ) THEN
+         IF ( LO .GT. 0 ) THEN
+            CALL HMSCFL ( DECK(1:LD), OUTDIR(1:LO), STEM(1:LS), IERR )
+         ELSE
+            CALL HMSCFL ( DECK(1:LD), '.', STEM(1:LS), IERR )
+         ENDIF
+         CALL EXIT ( IERR )
+      ENDIF
       WRITE (0,'(A,A)') 'nastran: the deck was not translated and ',
      &   'nothing was solved.'
       CALL EXIT ( 3 )

@@ -49,6 +49,27 @@ C HALO:   returns to the solver in this process.
      &                STEM(1:LEN_TRIM(STEM)) // C_NULL_CHAR )
       RETURN
       END
+C HALO: SOL 145 with several subcases: the flutter driver, which runs
+C HALO:   one child process per subcase (each with --cosmic) side by
+C HALO:   side and joins their print files; it never returns to the
+C HALO:   solver in this process.
+      SUBROUTINE HMSCFL ( DECK, OUTD, STEM, IERR )
+      USE ISO_C_BINDING
+      IMPLICIT NONE
+      INTERFACE
+         INTEGER(C_INT) FUNCTION CMSCFL ( A, B, C )
+     &                           BIND(C, NAME='msc_sol145')
+         IMPORT :: C_INT, C_CHAR
+         CHARACTER(KIND=C_CHAR), DIMENSION(*), INTENT(IN) :: A, B, C
+         END FUNCTION
+      END INTERFACE
+      CHARACTER*(*)   DECK, OUTD, STEM
+      INTEGER         IERR
+      IERR = CMSCFL ( DECK(1:LEN_TRIM(DECK)) // C_NULL_CHAR,
+     &                OUTD(1:LEN_TRIM(OUTD)) // C_NULL_CHAR,
+     &                STEM(1:LEN_TRIM(STEM)) // C_NULL_CHAR )
+      RETURN
+      END
 C HALO: on a fatal, repeat the message on the terminal with what it
 C HALO:   means and what to do, from msc/mscdiag.c. Both executables.
       SUBROUTINE HMSCDG ( PRTF, IFND )

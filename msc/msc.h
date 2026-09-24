@@ -123,6 +123,10 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st);
 
 int  msc_sol200(const char *deck, const char *outdir, const char *stem);
 
+/* the SOL 145 driver (mscflut.c): one child run per subcase, side by side */
+int  msc_flutter_subcases(const msc_deck *d);
+int  msc_sol145(const char *deck, const char *outdir, const char *stem);
+
 /* the whole job: read `in`, translate, write the COSMIC deck to `out`.
  * Returns 0 when the deck can be run.                                 */
 int msc_translate(const char *in, const char *out, msc_stats *st);

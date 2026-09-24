@@ -25,9 +25,10 @@ int msc_run(const char *in, const char *out, const char *msgfile, int *rf,
      * by msc_sol200 below. The caller is told with a code of its own. */
     {
         msc_deck d;
-        int is200;
+        int is200, n145;
         if (msc_read(in, &d)) { msc_msg_close(); return 1; }
         is200 = (d.sol == 200);
+        n145  = msc_flutter_subcases(&d);
         msc_free(&d);
         if (is200) {
             msc_msg(MSC_INFO, 9400, "SOL 200: design optimisation. The analyses "
@@ -35,6 +36,15 @@ int msc_run(const char *in, const char *out, const char *msgfile, int *rf,
             msc_msg_close();
             if (rf) *rf = 200;
             return 200;
+        }
+        /* SOL 145 with several subcases: NASTRAN-95 solves one per run, so
+         * the driver runs one child per subcase side by side (mscflut.c) */
+        if (n145 > 1) {
+            msc_msg(MSC_INFO, 9449, "SOL 145 with %d subcases: one child run per "
+                    "subcase, in parallel, joined below.", n145);
+            msc_msg_close();
+            if (rf) *rf = 10;
+            return 145;
         }
     }
 

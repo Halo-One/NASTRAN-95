@@ -99,6 +99,10 @@ static HANDLE start_child(const char *full, const char *exe, const char *dir,
     if (msc_read(full, &d)) return NULL;
     find_subcases(&d, at, FLUT_MAXSUB);
     keep_subcase(&d, at, n, k);
+    /* msc_translate zeroes the tallies before translating; a translation
+     * called directly must too, or a stray autospc count selects an SPC
+     * set that was never written and the child dies in GP4            */
+    memset(&st, 0, sizeof(st));
     if (msc_translate_deck(&d, deck, &st)) {
         msc_free(&d);
         msc_msg(MSC_FATAL, 9451, "subcase %d was not translated; see the messages above.", id);

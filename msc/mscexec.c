@@ -87,7 +87,7 @@ static const char *case_keep[] = {
     "TITLE", "SUBTITLE", "SUBTITL", "LABEL", "ECHO", "MAXLINES", "LINES",
     "SPC", "MPC", "LOAD", "DEFORM", "TEMPERATURE", "TEMP",
     "METHOD", "CMETHOD", "FMETHOD", "SDAMPING", "FREQUENCY", "TSTEP",
-    "DLOAD", "IC", "NONLINEAR", "GUST", "RANDOM", "SDISPLACEMENT",
+    "DLOAD", "IC", "NONLINEAR", "GUST", "RANDOM",
     "XYPRINT", "XYPLOT", "XYPEAK", "XYPAPLOT", "XTITLE", "YTITLE",
     "XAXIS", "YAXIS", "XGRID", "YGRID", "TCURVE", "CURVELINESYMBOL",
     "DISPLACEMENT", "VELOCITY", "ACCELERATION", "SPCFORCES", "OLOAD",
@@ -114,6 +114,8 @@ static const case_drop case_drops[] = {
                      "reports them" },
     { "MEFFMASS",    "modal effective mass is printed, not solved for" },
     { "MODALSE",     "modal strain energy output" },
+    { "SDISPLACEMENT", "the modal coordinates printed per output time; the "
+                     "response itself is unaffected (UFM 614 in the solver)" },
     { "ESE",         "element strain energy output, which the 1970s solver "
                      "does not compute; the modes and frequencies are "
                      "unaffected" },

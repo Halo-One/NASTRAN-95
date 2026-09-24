@@ -174,6 +174,19 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
         "files are joined into %s.out in subcase order.",
         n, jobs, stem);
 
+    /* the in-core aerodynamic solve (mis/ampcz.f) is threaded; with jobs
+     * children side by side each gets its share of the processors        */
+    if (!getenv("OMP_NUM_THREADS")) {
+        SYSTEM_INFO si2;
+        char        omp[40];
+        int         th;
+        GetSystemInfo(&si2);
+        th = (int) si2.dwNumberOfProcessors / jobs;
+        if (th < 1) th = 1;
+        sprintf(omp, "OMP_NUM_THREADS=%d", th);
+        _putenv(omp);
+    }
+
     /* the children, jobs at a time, each translated as it starts */
     _putenv("N95_CHILD=1");
     while (done < n) {

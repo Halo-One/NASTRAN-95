@@ -193,6 +193,46 @@ target_compile_options(nas PRIVATE $<$<COMPILE_LANGUAGE:Fortran>:${NASTRAN_FLAGS
 # years' time, and warnings in it are read, not silenced like the Fortran's.
 target_compile_options(nas PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra>)
 
+# mis/ampcz.f (Halo One, 2026) is the in-core complex solve that replaces the
+# out-of-core decomposition of the doublet lattice matrices in AMP. It is new
+# code with no static locals and no open-core aliasing of its own, so it is
+# the one file in the tree compiled optimised and, when the toolchain has it,
+# threaded with OpenMP (the trailing update of the LU and the right hand
+# sides). Everything else stays at -O0 for the reasons above. The link is
+# static, so libgomp is folded in like libgfortran.
+# The doublet lattice kernel is the other place a flutter run spends its
+# time: the kernel functions and their integrals (mis/incro.f, tker.f,
+# subp.f, subpb.f, idf1.f, idf2.f, snpdf.f, subi.f, akp2.f, asycon.f,
+# suba.f, intert.f) and the two routines that assemble the D matrices from
+# them (amgb1b.f, amgb1c.f, amgb1d.f). Those are arithmetic on their
+# arguments - no GINO, no open core - and are compiled optimised, with the
+# tree's other flags (-fno-automatic included) unchanged. The drivers
+# around them (amg.f, amgb1.f, amgb1a.f, dlamg.f, ...) write the matrices
+# through GINO and stay at -O0: with them optimised the aerodynamic matrix
+# came out unusable (a division by zero in the transpose that reads it).
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  set(DLM_KERNEL_SOURCES "")
+  foreach(f incro tker subp subpb idf1 idf2 snpdf subi akp2 asycon suba intert
+            amgb1b amgb1c amgb1d)
+    list(APPEND DLM_KERNEL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/mis/${f}.f")
+  endforeach()
+  set_source_files_properties(${DLM_KERNEL_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
+endif()
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  find_package(OpenMP COMPONENTS Fortran)
+  if(OpenMP_Fortran_FOUND)
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/ampcz.f"
+        PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;${OpenMP_Fortran_FLAGS}")
+    # -fopenmp at link time, not the imported target: that names the
+    # toolchain's libgomp.dll.a and the executable then wants libgomp-1.dll;
+    # with -static on the link, -fopenmp resolves -lgomp to libgomp.a
+    target_link_options(nas PUBLIC ${OpenMP_Fortran_FLAGS})
+  else()
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/ampcz.f"
+        PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic")
+  endif()
+endif()
+
 # bd/semdbd.f is NOT excluded, although the upstream CMake build excludes it.
 # It is the only BLOCK DATA in the tree that initialises /XMSSG/ (the "0***
 # USER FATAL MESSAGE" prefixes), /SEM/, /SYSTEM/, /XFIAT/ and /OSCENT/, and

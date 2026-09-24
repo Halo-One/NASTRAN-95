@@ -78,13 +78,45 @@ static int copy_file(FILE *to, const char *path)
     return 0;
 }
 
+/* translate subcase k into its own COSMIC deck and start the child that
+ * solves it; the handle of the child, or NULL                          */
+static HANDLE start_child(const char *full, const char *exe, const char *child_stem,
+                          int k, int n, int id)
+{
+    msc_deck  d;
+    msc_stats st;
+    char      deck[MSC_PATHLEN], q1[MSC_PATHLEN + 4];
+    int       at[FLUT_MAXSUB];
+    intptr_t  h;
+
+    snprintf(deck, sizeof(deck), "%s.dat", child_stem);
+    if (msc_read(full, &d)) return NULL;
+    find_subcases(&d, at, FLUT_MAXSUB);
+    keep_subcase(&d, at, n, k);
+    if (msc_translate_deck(&d, deck, &st)) {
+        msc_free(&d);
+        msc_msg(MSC_FATAL, 9451, "subcase %d was not translated; see the messages above.", id);
+        return NULL;
+    }
+    msc_free(&d);
+    if (k == 0) msc_tally_print();
+    snprintf(q1, sizeof(q1), "\"%s\"", deck);
+    h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, ".", NULL);
+    if (h == -1) {
+        msc_msg(MSC_FATAL, 9452, "could not start the child run for subcase %d: is %s runnable?", id, exe);
+        return NULL;
+    }
+    fprintf(stderr, "nastran: subcase %d -> %s.out (running)\n", id, child_stem);
+    return (HANDLE) h;
+}
+
 int msc_sol145(const char *deck, const char *outdir, const char *stem)
 {
     char   exe[MAX_PATH], full[MAX_PATH], msg[MSC_PATHLEN];
     char   child_stem[FLUT_MAXSUB][MSC_PATHLEN];
     int    at[FLUT_MAXSUB], id[FLUT_MAXSUB], code[FLUT_MAXSUB];
-    HANDLE proc[FLUT_MAXSUB];
-    int    n, k, running = 0, jobs, worst = 0;
+    HANDLE hproc[FLUT_MAXSUB];
+    int    n, k, jobs, worst = 0, started = 0, done = 0, failed = 0;
     const char *env;
     msc_deck d;
 
@@ -103,9 +135,13 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
     if (msc_read(full, &d)) { msc_msg_close(); return 3; }
     n = find_subcases(&d, at, FLUT_MAXSUB);
     for (k = 0; k < n; k++) {
-        const char *p = d.cases[at[k]] + 7;
-        id[k] = atoi(p);
+        const char *p = d.cases[at[k]];
+        while (*p == ' ' || *p == '\t') p++;
+        id[k] = atoi(p + 7);
         if (id[k] <= 0) id[k] = k + 1;
+        snprintf(child_stem[k], sizeof(child_stem[k]), "%s_s%d", stem, id[k]);
+        code[k] = -1;
+        hproc[k] = NULL;
     }
     msc_free(&d);
 
@@ -126,63 +162,34 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
         "subcase order; each child's own is %s_s<subcase>.out.",
         n, jobs, stem, stem);
 
-    /* one translated deck per subcase, then the children */
+    /* the children, jobs at a time, each translated as it starts */
     _putenv("N95_CHILD=1");
-    for (k = 0; k < n; k++) {
-        msc_stats st;
-        char cosmic[MSC_PATHLEN], q1[MSC_PATHLEN + 4], q2[8];
-        intptr_t h;
+    while (done < n) {
+        HANDLE active[FLUT_MAXSUB];
+        int    which[FLUT_MAXSUB], n_active = 0, i;
+        DWORD  w, ec = 0;
 
-        snprintf(child_stem[k], sizeof(child_stem[k]), "%s_s%d", stem, id[k]);
-        snprintf(cosmic, sizeof(cosmic), "%s_n95.dat", child_stem[k]);
-        if (msc_read(full, &d)) { msc_msg_close(); return 3; }
-        find_subcases(&d, at, FLUT_MAXSUB);
-        keep_subcase(&d, at, n, k);
-        if (msc_translate_deck(&d, cosmic, &st)) {
-            msc_free(&d);
-            msc_msg(MSC_FATAL, 9451, "subcase %d was not translated; see the messages above.", id[k]);
-            msc_msg_close();
-            return 3;
+        while (started < n && started - done < jobs) {
+            hproc[started] = start_child(full, exe, child_stem[started], started, n, id[started]);
+            if (!hproc[started]) { code[started] = 3; done++; failed = 1; }
+            started++;
         }
-        msc_free(&d);
-        if (k == 0) msc_tally_print();
-
-        /* wait for a slot */
-        while (running >= jobs) {
-            DWORD w = WaitForMultipleObjects((DWORD) running, proc, FALSE, INFINITE);
-            int   i = (int) (w - WAIT_OBJECT_0), j;
-            DWORD ec = 0;
-            if (i < 0 || i >= running) break;
-            GetExitCodeProcess(proc[i], &ec);
-            CloseHandle(proc[i]);
-            for (j = 0; j < n; j++) if (proc[j] == proc[i] && code[j] == -1) code[j] = (int) ec;
-            for (j = i; j < running - 1; j++) proc[j] = proc[j + 1];
-            running--;
+        for (k = 0; k < n; k++)
+            if (hproc[k] && code[k] == -1) { active[n_active] = hproc[k]; which[n_active] = k; n_active++; }
+        if (n_active == 0) {
+            if (done < n) failed = 1;
+            break;
         }
-        snprintf(q1, sizeof(q1), "\"%s\"", cosmic);
-        snprintf(q2, sizeof(q2), ".");
-        h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, q2, NULL);
-        if (h == -1) {
-            msc_msg(MSC_FATAL, 9452, "could not start the child run for subcase %d: is %s runnable?", id[k], exe);
-            msc_msg_close();
-            return 3;
-        }
-        code[k] = -1;
-        proc[running++] = (HANDLE) h;
-        fprintf(stderr, "nastran: subcase %d -> %s.out (running)\n", id[k], child_stem[k]);
-    }
-    /* the handles were kept in start order in proc[] only while running;
-     * finish the rest and take every exit code by waiting on each        */
-    while (running > 0) {
-        DWORD w = WaitForMultipleObjects((DWORD) running, proc, FALSE, INFINITE);
-        int   i = (int) (w - WAIT_OBJECT_0), j;
-        DWORD ec = 0;
-        if (i < 0 || i >= running) break;
-        GetExitCodeProcess(proc[i], &ec);
-        CloseHandle(proc[i]);
-        for (j = 0; j < n; j++) if (code[j] == -1) { code[j] = (int) ec; break; }
-        for (j = i; j < running - 1; j++) proc[j] = proc[j + 1];
-        running--;
+        w = WaitForMultipleObjects((DWORD) n_active, active, FALSE, INFINITE);
+        i = (int) (w - WAIT_OBJECT_0);
+        if (i < 0 || i >= n_active) { failed = 1; break; }
+        k = which[i];
+        GetExitCodeProcess(hproc[k], &ec);
+        CloseHandle(hproc[k]);
+        hproc[k] = NULL;
+        code[k] = (int) ec;
+        done++;
+        fprintf(stderr, "nastran: subcase %d -> %s.out (exit code %d)\n", id[k], child_stem[k], code[k]);
     }
 
     /* the joined print file, and the verdict */
@@ -195,13 +202,13 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
             char child_prt[MSC_PATHLEN];
             snprintf(child_prt, sizeof(child_prt), "%s.out", child_stem[k]);
             if (code[k] > worst) worst = code[k];
-            if (out && copy_file(out, child_prt))
+            if (!out || copy_file(out, child_prt))
                 msc_msg(MSC_WARN, 9453, "subcase %d left no print file (%s, exit code %d).",
                         id[k], child_prt, code[k]);
-            fprintf(stderr, "nastran: subcase %d -> %s (exit code %d)\n", id[k], child_prt, code[k]);
         }
         if (out) fclose(out);
     }
+    if (failed && worst < 3) worst = 3;
     msc_msg_summary();
     msc_msg_close();
     fprintf(stderr, "nastran: %s -> %s.out (%d subcases joined)\n", stem, stem, n);

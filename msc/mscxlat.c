@@ -831,6 +831,10 @@ static void renumber_ids(msc_ctx *x, msc_card *c)
             { "TEMP",    { 0 },          2, 2 },    /* SID G1 T1 G2 T2         */
             { "PLOAD",   { 3, 4, 5, 6 }, 0, 0 },
             { "PLOAD1",  { 2 },          0, 0 },    /* element id              */
+            { "DAREA",   { 2, 5 },       0, 0 },    /* SID G1 C1 A1 G2 C2 A2   */
+            { "DELAY",   { 2, 5 },       0, 0 },
+            { "DPHASE",  { 2, 5 },       0, 0 },
+            { "TIC",     { 2 },          0, 0 },    /* SID G C U0 V0           */
             { "GRDSET",  { 0 },          0, 0 },
             { NULL,      { 0 },          0, 0 }
         };

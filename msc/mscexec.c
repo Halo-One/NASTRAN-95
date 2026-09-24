@@ -164,6 +164,15 @@ static void split_case(const char *line, char *name, char *opts, char *val)
     msc_trim(val);
 }
 
+/* whether a case control line ends with a comma, ignoring blanks */
+static int ends_with_comma(const char *s)
+{
+    size_t k = strlen(s);
+    while (k > 0 && (s[k - 1] == ' ' || s[k - 1] == '\t' ||
+                     s[k - 1] == '\r' || s[k - 1] == '\n')) k--;
+    return k > 0 && s[k - 1] == ',';
+}
+
 /* NASTRAN reads a case control command by as much of its name as is
  * unambiguous, and every deck in the wild uses the short forms: DISP,
  * SPCF, ELFO, SUBT. So a name matches when it is a prefix of a known
@@ -192,12 +201,22 @@ void msc_case_write(FILE *fp, msc_deck *d, int *spc_sel, int *method_sel,
 {
     char name[MSC_FLDLEN * 2], opts[MSC_LINELEN], val[MSC_LINELEN];
     const char *full;
-    int  i, j;
+    int  i, j, cont = 0;
 
     *spc_sel = 0;
     *method_sel = 0;
 
     for (i = 0; i < d->ncase; i++) {
+        /* the continuation lines of a SET (a trailing comma continues
+         * it onto the next line, in both dialects) are ids, not
+         * commands, and go through as written                       */
+        if (cont) {
+            const char *p = d->cases[i];
+            while (*p == ' ' || *p == '\t') p++;
+            fprintf(fp, "     %s\n", p);
+            cont = ends_with_comma(p);
+            continue;
+        }
         split_case(d->cases[i], name, opts, val);
         if (!name[0]) continue;
 
@@ -268,6 +287,14 @@ void msc_case_write(FILE *fp, msc_deck *d, int *spc_sel, int *method_sel,
             msc_msg(MSC_INFO, 9103,
                     "%s(%s): the options are MSC's and are dropped; the "
                     "request itself is kept.", name, opts);
+        }
+        /* SET n = list: the set number is part of the command, not a
+         * value (SET = 103 = ... is UFM 614), and a list that runs on
+         * continues on the lines that follow                        */
+        if (msc_streq(name, "SET")) {
+            fprintf(fp, "SET %s\n", val);
+            cont = ends_with_comma(val);
+            continue;
         }
         if (msc_streq(name, "SUBCASE") || msc_streq(name, "OUTPUT"))
             fprintf(fp, "%s %s\n", name, val);

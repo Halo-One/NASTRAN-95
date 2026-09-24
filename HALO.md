@@ -509,6 +509,14 @@ before this work, agreed to three digits on the first flexible root).
   gain available from process parallelism: every child recomputes the modes
   and the full aerodynamic matrix set, so splitting finer - one child per
   matched point - would repeat that forty times for seconds of PK iteration.
+  The children run `--cosmic` and print NASTRAN-95's own layout; the parent
+  joins their prints in subcase order and then rewrites the joined file into
+  MSC's layout with `msc_f06`, as a single run does from `mds/hmsc.f` (the
+  sorted echo's title, which has one more space between the words in the
+  1995 print and which a reader finds by the exact string; the renumbered
+  ids put back; blank lines as one space). Until that call was there a
+  multi-subcase print had no echo a reader recognised, and no mode shape
+  could be drawn from it.
 * **Inside a subcase, across k**: the AMP loop over (Mach, k) pairs is
   embarrassingly parallel in principle, but the module is written around one
   open core and one set of GINO scratch files; threading it means threading
@@ -525,6 +533,46 @@ before this work, agreed to three digits on the first flexible root).
   (the demos d10021a-d10023a are the check).
 * **Not worth it**: -O2 on the whole tree (breaks the parser and the FEER
   guards, see above); a per-point split of the flutter loop.
+
+### Eigenvectors at marked loops, and the root tracker
+
+A negative velocity in the FLFACT list is the request both MSC and
+NASTRAN-95 understand: the eigenvectors of that flutter loop are printed.
+NASA's FA1 prints, for every accepted root of the loop, the modal vector -
+`FA1PKV`, `EIGENVECTOR FROM THE PK METHOD`, the eigenvalue and then the
+complex coefficient of each mode of the modal basis - and the rigid format
+recovers the physical vectors at the DISP set, when the case control asks
+for them (`DISP` and `OFREQUENCY`, which the front end keeps; `OFREQUENCY`
+must precede `OUTPUT(XYPLOT)`), through MODACC, DDR1, SDR2 and OFP as
+`COMPLEX EIGENVECTOR` tables in the layout MSC prints, so one reader reads
+either solver. Every root of the loop is printed, not the one that crossed:
+the monarch deck with twenty loops marked prints 1,201 physical vectors at
+251 points and the file is 120 MB. That is the price of the 1970s output
+path; a per-root request would be a change in FA1's flag handling and VDR.
+
+The order of the roots between loops was the other half of the problem.
+FA1 accepts the PK roots of a loop in ascending frequency (`RSORT` on the
+imaginary part), so POINT n of the summary is the n-th lowest root at that
+speed, and where two roots cross in frequency the columns swap: the V-g
+curves kink and the crossing search reports crossings that are not there.
+`mis/fa1pkt.f` adds a tracker: `FA1PKT` keeps every accepted root's modal
+vector and eigenvalue of the loop on scratch files (302 for the vectors,
+the previous loop's vectors and eigenvalues on MXHH, 204), and `FA1PKU`
+assigns the roots of the next loop to the previous loop's places greedily,
+by the modal assurance criterion between the vectors plus a quarter of the
+eigenvalue distance (the first version compared vectors alone and, with a
+root compared against itself, never moved anything). The print says
+`ROOT TRACKING: FLUTTER LOOP n - m OF k ROOTS TOOK ANOTHER PLACE TO FOLLOW
+THE LOOP BEFORE` for every loop that reordered. Measured on the reduced
+monarch deck (Mach 0.10, 40 matched points, 20 modes) against the MATLAB
+re-sort the repo's plotter does after the fact (nearest predicted frequency
+and damping, the prediction extrapolated from the two points before): both
+lower the elastic roots' mean |delta g| per step from 0.078 to 0.054 at
+equal frequency continuity, and they agree on the order, so the plotter's
+re-sort stays on as the check of the solver's. On the full deck a third
+to two thirds of the 57 roots change place at most loops - the low-speed
+end, where the aerodynamic roots and the rigid body roots wander, is where
+the frequency order and the tracked order differ most.
 
 ### What the g-method would take
 

@@ -3,7 +3,7 @@ C
       EXTERNAL        LSHIFT,RSHIFT,ORF
       LOGICAL         ABORT,BADDAT,BADFOR,IFPDCO
       INTEGER         M(100),RET,THRU,NFDH(10),ITYPE(12),ISCAL(4),
-     1                ORF,RSHIFT,LSHIFT,C,P,T1,BLANK,MET(4),MOT(3),GC
+     1                ORF,RSHIFT,LSHIFT,C,P,T1,BLANK,MET(5),MOT(3),GC
       CHARACTER       UFM*23,UWM*25,UIM*29,SFM*25
       COMMON /XMSSG / UFM,UWM,UIM,SFM
       COMMON /IFPX1 / NCDS,T1(2,310)
@@ -20,8 +20,8 @@ C
       DATA    IYES  , INO   /    4HYES , 4HNO   /
       DATA    MS,ML / 4HS   ,    4HL   /
       DATA    MOT   / 1HZ,  1HY, 2HZY  /
-      DATA    MET   / 1HK,  2HPK,2HKE,   3HINV  /
-      DATA    NMT   / 4     /
+      DATA    MET   / 1HK,  2HPK,2HKE,   3HINV, 4HPKNL /
+      DATA    NMT   / 5     /
       DATA    ITYPE, ISCAL  /
      1        4HFX  ,4HFY  ,4HFZ  ,4HFXE ,4HFYE ,4HFZE ,4HMX  ,4HMY  ,
      2        4HMZ  ,4HMXE ,4HMYE ,4HMZE ,4HLE  ,4HFR  ,4HLEPR,4HFRPR/

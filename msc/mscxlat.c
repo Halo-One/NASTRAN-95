@@ -544,6 +544,90 @@ static void do_eigrl(msc_ctx *x, msc_card *c)
             "\nand little else.");
 }
 
+/* The aeroelastic cards NASTRAN-95 reads under the same name but with
+ * fewer or older fields than MSC's.
+ *
+ * EIGC SID METHOD NORM G C E ND0 / ALPHAAJ OMEGAAJ ALPHABJ OMEGABJ LJ NEJ NDJ:
+ * the card and its continuation read the same, the methods do not.
+ * MSC's complex Lanczos (CLAN) and its other modern methods have no
+ * 1970s form; the upper Hessenberg method (HESS) finds every root of
+ * the problem, which is what a flutter K method's modal problem wants
+ * of it. DET, INV, HESS and FEER pass unchanged.                       */
+static void do_eigc(msc_ctx *x, msc_card *c)
+{
+    char m[MSC_FLDLEN];
+    int  i;
+    msc_card *o = emit(x, "EIGC");
+    for (i = 1; i <= c->nfld; i++) msc_set(o, i, msc_f(c, i));
+    strncpy(m, msc_f(c, 2), sizeof(m) - 1);
+    m[sizeof(m) - 1] = '\0';
+    msc_upper(m);
+    if (!msc_streq(m, "DET") && !msc_streq(m, "INV") &&
+        !msc_streq(m, "HESS") && !msc_streq(m, "FEER")) {
+        msc_set(o, 2, "HESS");
+        msc_msg(MSC_INFO, 9116,
+            "EIGC %s became EIGC HESS: NASTRAN-95 has no %s (complex\n"
+            "Lanczos and MSC's other methods). Upper Hessenberg finds every\n"
+            "root; the continuation's ND says how many to keep.",
+            msc_f(c, 1), m);
+    }
+}
+
+/* FLUTTER SID METHOD DENS MACH RFREQ IMETH NVALUE EPS: NASTRAN-95 knows
+ * K, KE, PK and, in this fork, MSC's PKNL (matched points: the three
+ * FLFACT lists walked together). Its IMETH is S (surface) or L (linear)
+ * spline interpolation of the aerodynamics in k; MSC's TCUB and the
+ * others become L, which is what its PK method uses anyway.           */
+static void do_flutter(msc_ctx *x, msc_card *c)
+{
+    char m[MSC_FLDLEN];
+    int  i;
+    msc_card *o = emit(x, "FLUTTER");
+    for (i = 1; i <= c->nfld; i++) msc_set(o, i, msc_f(c, i));
+    strncpy(m, msc_f(c, 6), sizeof(m) - 1);
+    m[sizeof(m) - 1] = '\0';
+    msc_upper(m);
+    if (m[0] && !msc_streq(m, "S") && !msc_streq(m, "L")) {
+        msc_set(o, 6, "L");
+        msc_msg(MSC_INFO, 9117,
+            "FLUTTER %s: IMETH %s (MSC) became L, linear interpolation in k,\n"
+            "the form NASTRAN-95 has (and the only one its PK method uses).",
+            msc_f(c, 1), m);
+    }
+}
+
+/* SPLINE1 EID CAERO BOX1 BOX2 SETG DZ [METH USAGE]: the last two are MSC's.
+ * TABDMP1 TID [TYPE] / f1 g1 ...: TYPE is MSC's; G is what NASTRAN-95
+ * tabulates, so it is dropped, and the others are refused.            */
+static void do_spline1(msc_ctx *x, msc_card *c)
+{
+    int i;
+    msc_card *o = emit(x, "SPLINE1");
+    for (i = 1; i <= 6 && i <= c->nfld; i++) msc_set(o, i, msc_f(c, i));
+}
+
+static void do_tabdmp1(msc_ctx *x, msc_card *c)
+{
+    char m[MSC_FLDLEN];
+    int  i;
+    msc_card *o;
+    strncpy(m, msc_f(c, 2), sizeof(m) - 1);
+    m[sizeof(m) - 1] = '\0';
+    msc_upper(m);
+    if (m[0] && !msc_streq(m, "G")) {
+        msc_msg_at(MSC_FATAL, 9118, c,
+            "TABDMP1 %s tabulates %s damping. NASTRAN-95 tabulates the\n"
+            "structural damping coefficient g only.\n"
+            "FIX   Give the table as g (TYPE G, or blank): g = 2 zeta = 1/Q.",
+            msc_f(c, 1), m);
+        x->fatal = 1;
+        return;
+    }
+    o = emit(x, "TABDMP1");
+    for (i = 1; i <= c->nfld; i++) msc_set(o, i, msc_f(c, i));
+    msc_set(o, 2, "");
+}
+
 static void do_param(msc_ctx *x, msc_card *c)
 {
     char n[MSC_FLDLEN];
@@ -632,14 +716,14 @@ static const char *copy_cards[] = {
     "FORCE", "FORCE1", "FORCE2", "MOMENT", "MOMENT1", "MOMENT2",
     "GRAV", "LOAD", "PLOAD", "PLOAD1", "PLOAD2",
     "TEMP", "TEMPD", "TEMPRB", "TEMPP1",
-    "EIGR", "EIGB", "EIGC", "EIGP",
+    "EIGR", "EIGB", "EIGP",
     "FREQ", "FREQ1", "FREQ2", "TSTEP",
     "TLOAD1", "TLOAD2", "RLOAD1", "RLOAD2", "DLOAD", "DAREA", "DELAY",
-    "DPHASE", "TABDMP1", "TABLED1", "TABLED2", "TABLED3", "TABLED4",
+    "DPHASE", "TABLED1", "TABLED2", "TABLED3", "TABLED4",
     "TABLEM1", "TABLEM2", "TABLEM3", "TABLEM4", "TABLES1", "TABLEST",
     "TF", "TIC", "NOLIN1", "NOLIN2", "NOLIN3", "NOLIN4",
-    "AERO", "AEROS", "CAERO1", "PAERO1", "SPLINE1", "SPLINE2", "SET1",
-    "FLUTTER", "FLFACT", "MKAERO1", "MKAERO2", "TRIM", "AESTAT", "AESURF",
+    "AERO", "AEROS", "CAERO1", "PAERO1", "SPLINE2", "SET1",
+    "FLFACT", "MKAERO1", "MKAERO2", "TRIM", "AESTAT", "AESURF",
     "DMI", "DMIG",
     NULL
 };
@@ -872,6 +956,10 @@ static void translate_bulk(msc_ctx *x)
         if (msc_streq(n, "PBUSH"))       { continue; }   /* used by CBUSH */
         if (msc_streq(n, "PBARL"))       { do_pbarl(x, c);     continue; }
         if (msc_streq(n, "EIGRL"))       { do_eigrl(x, c);     continue; }
+        if (msc_streq(n, "EIGC"))        { do_eigc(x, c);      continue; }
+        if (msc_streq(n, "FLUTTER"))     { do_flutter(x, c);   continue; }
+        if (msc_streq(n, "SPLINE1"))     { do_spline1(x, c);   continue; }
+        if (msc_streq(n, "TABDMP1"))     { do_tabdmp1(x, c);   continue; }
         if (msc_streq(n, "PARAM"))       { do_param(x, c);     continue; }
         if (msc_streq(n, "SPC1"))        { do_spc1(x, c);      continue; }
         if (msc_streq(n, "SUPORT1"))     { do_suport1(x, c);   continue; }
@@ -984,6 +1072,42 @@ static void do_suport1(msc_ctx *x, msc_card *c)
 }
 
 /* ------------------------------------------------------------------ */
+
+/* NASTRAN-95's aeroelastic rigid formats (AERO 10 flutter, AERO 11 gust
+ * response) solve one subcase: the flutter loop reads the first CASECC
+ * record for its FMETHOD and never comes back for another. A deck with
+ * several (MSC runs one per mach) keeps its first; the rest are named
+ * so that they can be run as decks of their own.                      */
+static void one_aero_subcase(msc_deck *d, int rf)
+{
+    int  i, n = 0, second = -1;
+    char up[MSC_LINELEN], dropped[MSC_LINELEN];
+
+    if (rf != 10 && rf != 11) return;
+    dropped[0] = '\0';
+    for (i = 0; i < d->ncase; i++) {
+        const char *p = d->cases[i];
+        while (*p == ' ' || *p == '\t') p++;
+        strncpy(up, p, sizeof(up) - 1);
+        up[sizeof(up) - 1] = '\0';
+        msc_upper(up);
+        if (strncmp(up, "SUBCASE", 7) != 0) continue;
+        n++;
+        if (n == 2) second = i;
+        if (n >= 2 && strlen(dropped) + strlen(up) + 3 < sizeof(dropped)) {
+            if (n > 2) strcat(dropped, ", ");
+            strcat(dropped, up);
+        }
+    }
+    if (n < 2) return;
+    msc_msg(MSC_WARN, 9115,
+        "%d subcases, and NASTRAN-95's %s rigid format solves one: the\n"
+        "first is run; %s are left out. Run one deck per subcase\n"
+        "for the rest.",
+        n, rf == 10 ? "flutter (AERO 10)" : "gust (AERO 11)", dropped);
+    for (i = second; i < d->ncase; i++) free(d->cases[i]);
+    d->ncase = second;
+}
 
 int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
 {
@@ -1115,6 +1239,7 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
             }
         }
     }
+    one_aero_subcase(d, rf);
     msc_case_write(fp, d, &spc_sel, &method_sel, st->autospc > 0, 0);
     fprintf(fp, "BEGIN BULK\n");
 

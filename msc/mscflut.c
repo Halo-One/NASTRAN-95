@@ -234,6 +234,12 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
                         id[k], child_prt, code[k]);
         }
         if (out) fclose(out);
+        /* the children ran --cosmic and wrote NASTRAN-95's own layout;
+         * the joined print is rewritten into MSC's, as a single run's is
+         * (mds/hmsc.f): the sorted echo's title read_nastran_grids looks
+         * for, the renumbered ids put back, blank lines as one space   */
+        if (out && msc_f06(prt))
+            msc_msg(MSC_WARN, 9454, "the joined print file %s was not rewritten into MSC's layout.", prt);
     }
     if (failed && worst < 3) worst = 3;
     msc_msg_summary();

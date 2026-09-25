@@ -83,6 +83,28 @@ static int flut_processors(void)
 #endif
 }
 
+/* the memory available now, in MB (0 when not known): Linux's
+ * MemAvailable, Windows' available physical memory                    */
+static long flut_mem_avail_mb(void)
+{
+#ifdef _WIN32
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms))
+        return (long) (ms.ullAvailPhys / (1024 * 1024));
+    return 0;
+#else
+    long kb = 0;
+    char line[256];
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof(line), f))
+        if (sscanf(line, "MemAvailable: %ld kB", &kb) == 1) break;
+    fclose(f);
+    return kb / 1024;
+#endif
+}
+
 /* an environment variable for the children. Windows' _putenv copies the
  * string; POSIX putenv would keep the caller's, so setenv there       */
 static void flut_setenv(const char *name, const char *value)
@@ -450,6 +472,24 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
         if (!getenv("N95_BLAS_THREADS")) {
             snprintf(num, sizeof(num), "%d", share);
             flut_setenv("N95_BLAS_THREADS", num);
+        }
+    }
+
+    /* the memory each child's AMP may hold in core (mis/ampk.f keeps up
+     * to 16 (Mach, k) pairs there, about 26 NJ**2 bytes each, 140 MB on
+     * a 2,282-box model; mis/amgk.f a batch of AJJs): half of what is
+     * available now, shared among the children running at once, at
+     * most 2 GB each and at least 512 MB (on the monarch deck 800 MB a
+     * child ran as fast as 4 GB). A caller's N95_AMP_MB stands.       */
+    if (!getenv("N95_AMP_MB")) {
+        long avail = flut_mem_avail_mb();
+        if (avail > 0) {
+            char num[40];
+            long mb = avail / (2L * jobs);
+            if (mb > 2048) mb = 2048;
+            if (mb < 512) mb = 512;
+            snprintf(num, sizeof(num), "%ld", mb);
+            flut_setenv("N95_AMP_MB", num);
         }
     }
 

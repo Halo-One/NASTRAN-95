@@ -243,10 +243,15 @@ endif()
 # by side, a thread per loop, with FA1PKE's arithmetic transcribed onto
 # arrays of its own, and hands FA1PKE each loop to write in order; it is
 # compiled the same way and threaded with OpenMP when the toolchain has it.
+# mis/mma10k.f holds the two inner loops of MMA104 (the complex double
+# matrix product MPYAD uses for QKH = SKJ QJH and QIH = GKI(T) QKH, per
+# reduced frequency), which MMA104 now calls: MMA104 itself takes one
+# open-core array as three dummies of different types and stays at -O0.
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   set_source_files_properties(
       "${CMAKE_CURRENT_SOURCE_DIR}/mis/fa1pkq.f"
       "${CMAKE_CURRENT_SOURCE_DIR}/mis/egnvct.f"
+      "${CMAKE_CURRENT_SOURCE_DIR}/mis/mma10k.f"
       PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off")
   find_package(OpenMP COMPONENTS Fortran)
   if(OpenMP_Fortran_FOUND)
@@ -327,13 +332,16 @@ if(NASTRAN_LAPACK_LIBRARIES)
 else()
   set(AMPCZS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mis/ampczs/ampczs_builtin.f")
 endif()
-target_sources(nas PRIVATE "${AMPCZS_SOURCE}")
+# ampczb.f, the built-in LU itself, is in every build: the LAPACK one
+# falls back to it with N95_AJJ_SOLVE=BUILTIN.
+set(AMPCZB_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mis/ampczs/ampczb.f")
+target_sources(nas PRIVATE "${AMPCZS_SOURCE}" "${AMPCZB_SOURCE}")
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   if(OpenMP_Fortran_FOUND)
-    set_source_files_properties("${AMPCZS_SOURCE}"
+    set_source_files_properties("${AMPCZS_SOURCE}" "${AMPCZB_SOURCE}"
         PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;${OpenMP_Fortran_FLAGS}")
   else()
-    set_source_files_properties("${AMPCZS_SOURCE}"
+    set_source_files_properties("${AMPCZS_SOURCE}" "${AMPCZB_SOURCE}"
         PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic")
   endif()
 endif()

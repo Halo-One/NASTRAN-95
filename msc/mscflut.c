@@ -171,6 +171,68 @@ static void child_at_mach(msc_deck *d, int id)
         "matrices it uses.", id, m, m, cut);
 }
 
+/* the marked loop's velocity on the AERO card. ADR recovers the
+ * aerodynamic loads of every recovered root at the root's reduced
+ * frequency k = omega b / V, with b/V one number for the run, BOV, which
+ * APD forms from the AERO card's velocity field; the matched-point decks
+ * leave it blank, so BOV = 0 and ADR stops (UIM 2272) and prints nothing.
+ * The roots recovered are those of the marked loops (a negative FLFACT
+ * velocity), so the marked loop's velocity is the one ADR needs: with
+ * one marked loop in the subcase every recovered root gets its k right;
+ * with several, the first loop's velocity serves them all and the other
+ * loops' loads are at the wrong k (said). Nothing else reads the field
+ * on a PK run: FA1 takes its velocities from the FLFACT lists.          */
+static void child_loads_velocity(msc_deck *d, int id)
+{
+    int    i, j, fmethod = 0, vel_set = 0, n_marked = 0;
+    double v = 0.0;
+    msc_card *aero = NULL;
+    for (i = 0; i < d->ncase; i++) {
+        char up[MSC_LINELEN];
+        const char *p = d->cases[i], *e;
+        while (*p == ' ' || *p == '\t') p++;
+        strncpy(up, p, sizeof(up) - 1);
+        up[sizeof(up) - 1] = '\0';
+        msc_upper(up);
+        if (strncmp(up, "FMETHOD", 7) == 0 && (e = strchr(up, '=')) != NULL)
+            fmethod = atoi(e + 1);
+    }
+    if (!fmethod) return;
+    for (i = 0; i < d->nbulk; i++) {
+        const msc_card *c = &d->bulk[i];
+        if (msc_streq(c->name, "FLUTTER") && msc_fi(c, 1, 0) == fmethod) {
+            vel_set = msc_fi(c, 5, 0);
+            break;
+        }
+    }
+    if (!vel_set) return;
+    for (i = 0; i < d->nbulk; i++) {
+        const msc_card *c = &d->bulk[i];
+        if (!msc_streq(c->name, "FLFACT") || msc_fi(c, 1, 0) != vel_set) continue;
+        for (j = 2; j <= c->nfld; j++) {
+            const char *f = msc_f(c, j);
+            if (f[0] != '-') continue;
+            if (!n_marked) v = -msc_fd(c, j, 0.0);
+            n_marked++;
+        }
+    }
+    if (!n_marked || v <= 0.0) return;
+    for (i = 0; i < d->nbulk; i++)
+        if (msc_streq(d->bulk[i].name, "AERO") && !d->bulk[i].dropped) { aero = &d->bulk[i]; break; }
+    if (!aero) return;
+    msc_setd(aero, 2, v);
+    if (n_marked == 1)
+        msc_msg(MSC_INFO, 9456,
+            "subcase %d: the AERO card's velocity is %g, the marked loop's, so the\n"
+            "aerodynamic loads (AEROF) come out at that loop's reduced frequencies.", id, v);
+    else
+        msc_msg(MSC_WARN, 9456,
+            "subcase %d: %d loops are marked; the AERO card's velocity is the first\n"
+            "one's (%g), so only that loop's aerodynamic loads (AEROF) are at their\n"
+            "reduced frequencies - the other loops' are at the wrong k. Mark one loop\n"
+            "per subcase for the loads.", id, n_marked, v);
+}
+
 static int copy_file(FILE *to, const char *path)
 {
     char  buf[65536];
@@ -199,6 +261,7 @@ static HANDLE start_child(const char *full, const char *exe, const char *dir,
     find_subcases(&d, at, FLUT_MAXSUB);
     keep_subcase(&d, at, n, k);
     child_at_mach(&d, id);
+    child_loads_velocity(&d, id);
     /* msc_translate zeroes the tallies before translating; a translation
      * called directly must too, or a stray autospc count selects an SPC
      * set that was never written and the child dies in GP4            */

@@ -596,11 +596,20 @@ ADR takes the reduced frequency of each root from `BOV`, b/V, which APD
 sets from the AERO card's velocity field - the matched-point decks leave
 it blank, so `BOV = 0.0` and ADR says so (UIM 2272) and prints nothing.
 For the K method b/V is one number per loop; for PK on matched points
-every marked loop has its own velocity, and several loops are usually
-marked in one subcase. The next step is FA1 handing ADR the velocity per
-root (the loop's V, which FA1 knows and FA1PKV prints beside each
-vector) instead of one BOV for the run; until then the animator's
-pressure contour has a reader for ADRPRT's layout and nothing to read.
+every marked loop has its own velocity. The driver now puts the marked
+loop's velocity on each child's AERO card (`child_loads_velocity`,
+UIM 9456): the roots ADR recovers are that loop's, so one BOV serves
+them all, and the loads come out at every root's own reduced frequency
+- one marked loop per subcase, which is how the decks are generated
+(`flutter_params.nastran.eigenvector_EAS`); with several marked loops
+the first one's velocity serves and the others' loads are at the wrong
+k (UWM 9456 says so). Nothing else reads the field on a PK run: FA1
+takes its velocities from the FLFACT lists, APD forms BOV from it and
+that is all. On the two-subcase deck the twelve recovered roots get
+their `AERODYNAMIC LOADS (UNIT DYNAMIC PRESSURE)` tables; the beam's
+in-plane modes show 1e-17, the out-of-plane ones order one to sixty,
+which is the physics. FA1 handing ADR the velocity per root would
+lift the one-loop rule; not needed for the decks as written.
 
 The parallel driver now gives each child its subcase's Mach, read off
 the FMETHOD's FLUTTER card and its Mach FLFACT (one value on the

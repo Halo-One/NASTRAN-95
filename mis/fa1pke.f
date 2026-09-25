@@ -6,8 +6,9 @@ C
 C     LAST REVISED  2/91, BY J.PETKAS/LOCKHEED
 C     ELEMENTS OF INTERPOLATION MATRIX IN D.P. AND LEAST SQUARE FIT
 C
-      LOGICAL          EIGV
+      LOGICAL          EIGV,PRTV
       INTEGER          BHH,BXHH,SYSBUF,NAME(2),TRL(7),BUF1,FLOOP,FSAVE,
+     1                 TSTART,PKMATC,PKVECT,
      1                 MXHH
       REAL             KINT
       CHARACTER*16     ENVPK
@@ -18,7 +19,10 @@ C
       COMMON /UNPAKX/  IOUT,INN,NNN,INCR1
       COMMON /ZZZZZZ/  Z(1)
       COMMON /FA1PKC/  NCORE,NK,IMVR,IK,IA,IQ,ICP,IFLAG
-      COMMON /BLANK /  FLOOP
+C HALO: the whole of FA1's parameter list, for PKVECT: the modal
+C HALO:   vector of every root printed at every loop (PARAM PKVECT 1),
+C HALO:   the recovery scratch written for the marked loops alone
+      COMMON /BLANK /  FLOOP,TSTART,ICEAD,PKMATC,PKVECT
       COMMON /CONDAS/  PI,TWOPI
       EQUIVALENCE      (Z(1),DZ(1))
       DATA    NAME  /  4HFA1P,4HKE  /
@@ -141,6 +145,7 @@ C
       I   = (FLOOP-1)*3
       EIGV= .FALSE.
       IF (Z(IMVR+I+1) .LT. 0.0) EIGV = .TRUE.
+      PRTV = EIGV .OR. PKVECT .NE. 0
       VEL = ABS(Z(IMVR+I+1))
       VELS= VEL*VEL
       RHO = (RREF*Z(IMVR+I+2))/2.0
@@ -275,8 +280,8 @@ C
       DO 175 I = 1,J,2
       IF (Z(IT+I) .NE. 0.0) GO TO 175
       NR = NR + 1
-      IF (EIGV) CALL FA1PKV (Z(IMA),Z(IV),Z(IB),NROW,Z(IT+I-1),Z(IMA),
-     1                       BREF,PI,VEL,Z(BUF1))
+      IF (PRTV) CALL FA1PKV (Z(IMA),Z(IV),Z(IB),NROW,Z(IT+I-1),Z(IMA),
+     1                       BREF,PI,VEL,Z(BUF1),EIGV)
   175 CONTINUE
       NRS = NR + 1
       NR  = NR/2
@@ -367,8 +372,8 @@ C
       Z(K+3) = (1.0/TWOPI)*Z(NL+I)
       IF (Z(NL+I) .NE. 0.0) Z(K+4) = (2.0*Z(NL+I-1))/Z(NL+I)
       IF (Z(NL+I) .EQ. 0.0) Z(K+4) = (BREF/(.34657*VEL))*Z(NL+I-1)
-      IF (EIGV) CALL FA1PKV (Z(IMA),Z(IV),Z(IB),NROW,Z(K),Z(IMA),
-     1                       BREF,PI,VEL,Z(BUF1))
+      IF (PRTV) CALL FA1PKV (Z(IMA),Z(IV),Z(IB),NROW,Z(K),Z(IMA),
+     1                       BREF,PI,VEL,Z(BUF1),EIGV)
       GO TO 210
 C
 C     FAILURE TO CONVERGE. REPLACE LOOP END WITH LEAST SQUARES FIT

@@ -550,6 +550,26 @@ the monarch deck with twenty loops marked prints 1,201 physical vectors at
 251 points and the file is 120 MB. That is the price of the 1970s output
 path; a per-root request would be a change in FA1's flag handling and VDR.
 
+`PARAM PKVECT 1` is the cheap half of it. The rigid format hands the
+parameter to FA1 as a fifth one (`V,Y,PKVECT=0`; the MPL entry two words
+longer, `xmpldd.f`), FA1PKE takes the whole of `/BLANK/` and calls FA1PKV
+for every loop, the last argument saying whether the loop is a marked one;
+FA1PKV writes the recovery scratch (301) for the marked loops alone and
+prints the modal vector for all of them, the header now `EIGENVALUE = ...
+LOOP = n VELOCITY = v` (repeated at the top of every page a vector runs
+over). The front end passes the PARAM through like PKMATCH (a PARAM it does
+not know is dropped as MSC's). The print grows by one complex number per
+mode per root per loop - the two-subcase deck prints 36 vectors instead of
+12, 21 KB more; the monarch at 110 modes, 40 loops and five Machs some
+22,000 vectors, about 150 MB, against 813 MB for the physical recovery and
+the loads of five marked loops - and the physical vector of any point is
+Phi q with the modes run's Phi, which the repo's animator forms from the
+modes print (`animate_nastran_flutter_mode`; the reader
+`read_nastran_pk_eigenvectors` joins a vector over its page breaks). The
+flutter summaries are unchanged by it, to every printed digit on the
+two-subcase deck, and the vector rebuilt at a marked loop is the recovered
+one to the print's five digits.
+
 The order of the roots between loops was the other half of the problem.
 FA1 accepts the PK roots of a loop in ascending frequency (`RSORT` on the
 imaginary part), so POINT n of the summary is the n-th lowest root at that
@@ -596,11 +616,20 @@ ADR takes the reduced frequency of each root from `BOV`, b/V, which APD
 sets from the AERO card's velocity field - the matched-point decks leave
 it blank, so `BOV = 0.0` and ADR says so (UIM 2272) and prints nothing.
 For the K method b/V is one number per loop; for PK on matched points
-every marked loop has its own velocity, and several loops are usually
-marked in one subcase. The next step is FA1 handing ADR the velocity per
-root (the loop's V, which FA1 knows and FA1PKV prints beside each
-vector) instead of one BOV for the run; until then the animator's
-pressure contour has a reader for ADRPRT's layout and nothing to read.
+every marked loop has its own velocity. The driver now puts the marked
+loop's velocity on each child's AERO card (`child_loads_velocity`,
+UIM 9456): the roots ADR recovers are that loop's, so one BOV serves
+them all, and the loads come out at every root's own reduced frequency
+- one marked loop per subcase, which is how the decks are generated
+(`flutter_params.nastran.eigenvector_EAS`); with several marked loops
+the first one's velocity serves and the others' loads are at the wrong
+k (UWM 9456 says so). Nothing else reads the field on a PK run: FA1
+takes its velocities from the FLFACT lists, APD forms BOV from it and
+that is all. On the two-subcase deck the twelve recovered roots get
+their `AERODYNAMIC LOADS (UNIT DYNAMIC PRESSURE)` tables; the beam's
+in-plane modes show 1e-17, the out-of-plane ones order one to sixty,
+which is the physics. FA1 handing ADR the velocity per root would
+lift the one-loop rule; not needed for the decks as written.
 
 The parallel driver now gives each child its subcase's Mach, read off
 the FMETHOD's FLUTTER card and its Mach FLFACT (one value on the

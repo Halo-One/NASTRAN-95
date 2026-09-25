@@ -685,9 +685,10 @@ static void do_param(msc_ctx *x, msc_card *c)
         pass_through(x, c);
         return;
     }
-    /* PKMATCH (this fork's): PK on matched points, read by FA1 through
-     * the AERO 10 rigid format                                        */
-    if (msc_streq(n, "PKMATCH")) {
+    /* PKMATCH and PKVECT (this fork's): PK on matched points, and the
+     * modal vector of every root printed at every loop, read by FA1
+     * through the AERO 10 rigid format                                */
+    if (msc_streq(n, "PKMATCH") || msc_streq(n, "PKVECT")) {
         pass_through(x, c);
         return;
     }

@@ -384,6 +384,15 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   endif()
 endif()
 
+# mds/n95fast.f (Halo One, 2026) holds the word copy, zero fill and
+# nonzero count that GINO's PACK and UNPACK now hand whole runs of
+# elements to when they need no conversion, and the sorted-list search
+# GP4 does for every MPC term. -O2; the same bits (words copied as words,
+# the same list position found).
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mds/n95fast.f"
+      PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic")
+endif()
 # The hot kernels a second time, for x86-64-v3 (Halo One, 2026): the PK
 # method's QR and products (mis/fa1pkq.f), its eigenvector solve
 # (mis/egnvct.f) and the doublet-lattice kernel for a batch of reduced

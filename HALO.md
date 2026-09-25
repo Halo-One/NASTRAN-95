@@ -648,3 +648,124 @@ In NASTRAN-95 terms, all of it lives in FA1's PK branch:
 The order of work is 1 then 2: without Q'(ik) the equation is PK's, and the
 sweep with a proper eigensolver is where the P-K fixed-point iteration's
 occasional wrong root goes away. Not started.
+
+## Linux, and the flutter run in a minute and a quarter
+
+Branch `halo-ase-sol145-linux`, on `halo-ase-sol145`. Two things: the branch builds
+and runs on Linux (and, untried, macOS), and a SOL 145 run on it is sixteen times
+faster - with the printed answer unchanged to the last line, except where the
+OpenBLAS solve (below) rounds a marginal root differently. The Windows build pins
+`halo-ase-sol145` until someone rebuilds from here; every change below is either
+behind `#ifdef _WIN32` or portable Fortran and CMake, so it can.
+
+The case everything was measured on is VehicleDesign's
+`monarch_demo_asm1083_flutter.dat`: five Machs, 120 modes, 60 matched points each,
+2,282 doublet lattice boxes, 24 to 48 reduced frequencies per Mach, on a 16-core,
+32-thread Linux machine. This branch's source with none of the speed-ups: 19 min
+50 s. With them: 74 s. Jon's Windows run of the same deck (`fcd681b`, 16 cores):
+25.6 min.
+
+### The POSIX port
+
+What VehicleDesign carried as `NASTRAN/build/linux/posix-port.patch` from
+2026-09-20 (against `1dcf4cf`), now in the tree: `msc/mscmain.c`'s own path
+(`/proc/self/exe`, `_NSGetExecutablePath`), `realpath`, `mkdir`/`chdir`;
+`msc/mscopt2.c`'s child runs by `fork`/`execv`/`waitpid` (arguments not quoted:
+nothing re-parses them); `msc/mscop4.c`'s `setenv` for `_putenv`; the path separator
+substituted into `bin/nastrn.f.in` by CMake; `-fno-pie`/`-no-pie` on ELF (open core
+has to sit below 2 GB for `LOCFX`); the trailing `0x1A` removed from six NASA files.
+
+`msc/mscflut.c`, the SOL 145 driver, was Windows-only (`_spawnl`,
+`WaitForMultipleObjects`, `GetSystemInfo`). On POSIX a child is `fork` + `execv`,
+the driver waits with `waitpid` for whichever finishes, the processor count is the
+process's CPU set (`sched_getaffinity`), and each child asks for `SIGTERM` when the
+driver dies (`PR_SET_PDEATHSIG`). A child ended by a signal, and on Windows a
+crashed child's negative NTSTATUS, count as fatal.
+
+### Where the time was
+
+`<stem>.log`'s CPU column is system time, so the profile came from the module each
+log was in, sampled against the wall clock, a `/proc` sampler of the main thread's
+user and system time, and a gprof build (which credits OpenMP's outlined functions to
+the preceding global symbol and does not see kernel time). For the Mach 0.10 child:
+modes 6 s, AMG (the doublet lattice) and AMP (the aerodynamic solve and
+products) 190 s between them, **FA1 16.5 min**. On a
+120-mode basis FA1 is the PK iteration's 240-square Hessenberg QR per root per
+iteration, 54 ms each at -O0, about 320 of them per matched point.
+
+### What was done
+
+Every change is fenced: new code, or NASA's code transcribed with the same
+arithmetic in the same order, compiled `-O2`/`-O3` with `-ffp-contract=off` (no
+fused multiply-add can change a bit) and never `-ffast-math`. Every one was checked
+by diffing print files line by line against this branch's source without it (only
+the clock and date lines excluded) at several thread counts.
+
+* **PK loops side by side** (`mis/fa1pkp.f`, hook in `mis/fa1pke.f`). FA1PKE solves
+  each flutter loop from k = 0 with nothing carried over, so on the first loop of a
+  Mach group FA1PKP solves them all, an OpenMP thread per loop (FA1PKL: FA1PKE's
+  labels 100 to 300 transcribed onto arrays of their own), and keeps what each loop
+  would have written; FA1PKE then writes loop by loop, in order (FA1PKR): the PK
+  eigenvectors and the non-convergence warnings printed, scratch 301 and 302, the
+  roots. The root tracker (FA1PKU) stays serial. `FA1PKV` and `FA1PKT` are split into
+  their compute and write halves (`FA1PKW`, `FA1PKX`) for the replay. DIAG 39,
+  `N95_PK_THREADS=1` and a basis of fewer than four modes keep the serial solve.
+* **The QR without aliasing** (`mis/fa1pkq.f`: FA1PKQ = FA1PKA + HSBG + ATEIG, FA1PKG
+  = GMMATS's square product; `-O3 -funroll-loops`, 7.6 ms per QR). The originals pass
+  one array as both a REAL input and a DOUBLE PRECISION work area. **ATEIG reads one
+  double outside its matrix**: its search for a small subdiagonal element (620-660)
+  steps past (2,1) to `A(1-IA)`, and whether that double is below EPS decides whether
+  the QR sweep starts at row 1 or 2, which moves the roots in the sixth digit. In
+  FA1PKE the address is the top of M^-1 B. The twin keeps the read, and FA1PKP lays
+  each thread's arrays out as open core is so that the same bytes are there (a
+  separate allocation gave different roots, or a segmentation fault).
+* **Doublet lattice rows side by side** (`mis/gendp.f`, hook in `mis/gend.f`). GEND's
+  rows are computed a block at a time on threads and packed in its order. The row
+  routines (`dpps`, `subp`, `snpdf`, `incro`, `tker`, `idf1`, `idf2`) are `-O2
+  -fautomatic` (no DATA, no SAVE, no local read before it is set in a call - the
+  maybe-uninitialized warnings on TKER's computed GO TOs were traced path by path),
+  and `/DLM/` and `/KDS/` are THREADPRIVATE in all four routines that name them (TKER,
+  INCRO, FLLD, SUBB). `N95_DLM_THREADS=1` keeps GEND's loop.
+* **AMP without k-squared file walks** (`mis/ampc.f`, `mis/ampd.f`, `/AMPHLO/`). Per
+  (Mach, k) pair AMPC rewound AJJL and skipped AJJCOL-1 columns, and AMPD the same on
+  SKJ: 2.6 million GINO records each over the 48 reduced frequencies of Mach 0.10, 31
+  s of system time. When the last pair left the file at the pair's first column, it is
+  reopened where it stands.
+* **The in-core solve through LAPACK** (`mis/ampczs/`). AMPCZ's solve is AMPCZS:
+  ZGETRF + ZGETRS when CMake is given a LAPACK (`NASTRAN_LAPACK_LIBRARIES`; the Linux
+  build links OpenBLAS 0.3.34 statically, DYNAMIC_ARCH, OpenMP), the built-in LU
+  (AMPCZB, the loops AMPCZ1 had) otherwise, and with `N95_AJJ_SOLVE=BUILTIN`.
+  **OpenBLAS in a static executable runs on one thread** unless told otherwise: its
+  OpenMP build records its thread ceiling in its own constructor, which runs before
+  libgomp has read `OMP_NUM_THREADS`; `ampczt_openblas.f` sets the count
+  (`N95_BLAS_THREADS`, else the OpenMP count). This is the one change that is not bit
+  for bit: a blocked LU rounds differently in double precision, and where that flips a
+  single-precision bit of QJH a marginal PK root (one that ends in the least-squares
+  fit, or two roots the tracker could pair either way) lands elsewhere - 108 of the
+  monarch print's 170,034 lines.
+* **MMA104's inner loops** (`mis/mma10k.f`) at -O2, called from MMA104, which passes
+  one open-core array as three dummies and stays at -O0.
+* **The driver shares the processors out by kind of work** (`msc/mscflut.c`). Each
+  child gets every processor for the coarse work (the rows, the PK loops) and waits
+  passively, and the LU gets the even share: the children finish at different times,
+  and an even split left the finished children's processors idle. 102 s with the even
+  split, 87 s this way, 400 s with spinning waits. A caller's `OMP_NUM_THREADS` is
+  taken as it is.
+
+| step | five-Mach deck | print against the unmodified source |
+|---|---|---|
+| unmodified | 19 min 50 s | - |
+| PK loops threaded, QR at -O2, rows threaded | 3 min 34 s | identical |
+| + OpenBLAS | 2 min 13 s | 108 lines |
+| + the file walks, OpenBLAS told its threads | 1 min 42 s | 108 lines |
+| + the driver's thread policy | 87 s | 108 lines |
+| + MMA104's loops, the QR at -O3 | 74 s | 108 lines |
+| the same, `N95_AJJ_SOLVE=BUILTIN` | 200 s | identical |
+
+### What is still serial
+
+AMP's per-k work outside the solve (GINO unpack and pack at -O0, AMPC1's copy of each
+AJJ before the in-core solve reads it again, MMA's products) is about 0.3 s per k on
+the main thread, the critical path of the Mach with the most reduced frequencies.
+FA1 is now four fifths the QR; a faster QR (LAPACK's DHSEQR) would be faster but not
+NASA's roots. A marked loop's output is OFP formatting, serial.

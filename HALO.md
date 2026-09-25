@@ -550,6 +550,26 @@ the monarch deck with twenty loops marked prints 1,201 physical vectors at
 251 points and the file is 120 MB. That is the price of the 1970s output
 path; a per-root request would be a change in FA1's flag handling and VDR.
 
+`PARAM PKVECT 1` is the cheap half of it. The rigid format hands the
+parameter to FA1 as a fifth one (`V,Y,PKVECT=0`; the MPL entry two words
+longer, `xmpldd.f`), FA1PKE takes the whole of `/BLANK/` and calls FA1PKV
+for every loop, the last argument saying whether the loop is a marked one;
+FA1PKV writes the recovery scratch (301) for the marked loops alone and
+prints the modal vector for all of them, the header now `EIGENVALUE = ...
+LOOP = n VELOCITY = v` (repeated at the top of every page a vector runs
+over). The front end passes the PARAM through like PKMATCH (a PARAM it does
+not know is dropped as MSC's). The print grows by one complex number per
+mode per root per loop - the two-subcase deck prints 36 vectors instead of
+12, 21 KB more; the monarch at 110 modes, 40 loops and five Machs some
+22,000 vectors, about 150 MB, against 813 MB for the physical recovery and
+the loads of five marked loops - and the physical vector of any point is
+Phi q with the modes run's Phi, which the repo's animator forms from the
+modes print (`animate_nastran_flutter_mode`; the reader
+`read_nastran_pk_eigenvectors` joins a vector over its page breaks). The
+flutter summaries are unchanged by it, to every printed digit on the
+two-subcase deck, and the vector rebuilt at a marked loop is the recovered
+one to the print's five digits.
+
 The order of the roots between loops was the other half of the problem.
 FA1 accepts the PK roots of a loop in ascending frequency (`RSORT` on the
 imaginary part), so POINT n of the summary is the n-th lowest root at that

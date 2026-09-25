@@ -893,6 +893,89 @@ the clock and date lines excluded) at several thread counts.
 | + MMA104's loops, the QR at -O3 | 74 s | 108 lines |
 | the same, `N95_AJJ_SOLVE=BUILTIN` | 200 s | identical |
 
+### The second pass: 74 s to 40 s, the same bits
+
+The same deck and machine. At 74 s the profile (a CPU sampler per child per module,
+gprof with `-g` for lines) said: of 1,720 CPU seconds, FA1 1,140, AMG 327, AMP 200;
+and the wall clock was the Mach 0.10 child's AMP, 41 s nearly serial on its main
+thread. Everything below is again new code or NASA's code transcribed with the same
+arithmetic in the same order; each was checked against the build before it, and the
+whole against `halo-ase-sol145` 8cd363e.
+
+* **EGNVCT's pivot searches** (`mis/egnvct.f`). The complete-pivoting elimination
+  took CABS of every element of the active block at every step: four billion
+  `hypotf` calls per Mach, a fifth of FA1. The search keeps the first element whose
+  CABS exceeds all before it, so an element whose squared modulus (in double
+  precision: exact but for one rounding) is below `(X1*(1-2**-20))**2` provably
+  cannot be picked and is skipped; every other one is tested as NASA wrote it. 7.97
+  -> 1.07 ms per call.
+* **AMP's pair loop in core** (`mis/ampk.f`). A pipeline of OpenMP tasks: per pair a
+  read (its AJJ and SKJ off the files, kept open), a compute (DJH, the solve, QKH =
+  SKJ QJH, QIH = GKI(T) QKH) and a write (QJHL, QHHL); every GINO call is in a read
+  or write task, chained on one dependence in pair order. The compute replicates
+  SADD's two multiply-adds and MMA214's and MMA104's sums in their order; the serial
+  path skips terms with an unstored (zero) factor and this keeps them, and a zero of
+  either sign added to a sum that started at +0 changes nothing. Up to 16 pairs in
+  core (`N95_AMP_SLOTS`, `N95_AMP_MB`), each solve on one thread: OpenBLAS's ZGETRF
+  gives the same bits on 1 thread as on 32. `N95_AMP_PIPE=0` keeps AMP's loop.
+* **AMG's pairs in batches** (`mis/amgk.f`, `mis/tkerv.f`). Per (Mach, k) pair AMG
+  re-read the group's record, re-wrote the same SKJ and recomputed every element; of
+  that only the kernels and what is linear in them depend on k. For one
+  doublet-lattice group, up to 8 pairs of one Mach (`N95_AMG_BATCH`) are done
+  together: the steady part (SNPDF), the geometry, TKER's branches, square roots and
+  exponential, IDF1/IDF2's logarithm and arctangent once; every k-dependent
+  statement a loop over the batch (TKERV, INCROK, SUBPK, IDF1V, IDF2V, DPPSK); each
+  pair's rows packed in turn. AJJ dumped as AMP reads it is byte for byte the serial
+  NASA loop's. **gfortran vectorises SIN and COS in such loops into glibc's
+  libmvec** (`_ZGVdN8v_sinf`): it pre-includes `math-vector-fortran.h`, even without
+  `-ffast-math`, and libmvec rounds differently - 194,796 of 200,000 test geometries
+  differed until the loops that call them were marked `!GCC$ NOVECTOR`. (Two of the
+  kernel files compiled -O2 since `halo-ase`, `amgb1b.f` and `amgb1c.f`, the
+  compressor-blade theory, do call libmvec; the doublet lattice does not.)
+* **FA1PKG with its loops swapped** (`mis/fa1pkq.f`): J innermost instead of K, every
+  C(I,J) the same sum in the same order, the inner loop contiguous. 449 -> 80 us.
+* **The kernels twice, for x86-64-v3** (`msc/mscisa.c`, CMake). `fa1pkq.f`,
+  `egnvct.f` and `tkerv.f` are compiled for the baseline and, under V3 names CMake
+  makes from the same source, with `-march=x86-64-v3`; each hands over to its V3
+  build when `__builtin_cpu_supports("x86-64-v3")` (`N95_ISA=0` keeps the baseline).
+  `-ffp-contract=off` and no `-ffast-math`: wider vectors, the same bits. FA1's CPU
+  842 -> 707 s. (`x86-64-v4`/AVX-512 was slower on the QR than v3.)
+* **GINO's PACK and UNPACK** (`mds/pack.f`, `mds/unpack.f`, `mds/n95fast.f`). A run
+  of elements that needs no conversion and lies word after word is copied in one
+  call, with the loop's own bookkeeping after it.
+* **GP4's MPC look-up by bisection** (`mis/gp4.f`): the linear search of the sorted,
+  repeat-free list of dependent SILs for every MPC term was 1.6 s of every child's
+  setup.
+* **The setup's inner loops** (`mis/n95twin.f`): FERXTD's reorthogonalisation,
+  DECOMP's loop 810 and MMA112's inner product as optimised copies of themselves.
+
+| step | five-Mach deck |
+|---|---|
+| the first pass | 74 s |
+| + EGNVCT, AMPK | 56 s |
+| + AMGK | 49 s |
+| + FA1PKG | 47 s |
+| + x86-64-v3 kernels | 44 s |
+| + GINO, GP4, the setup loops | 40 s |
+
+The Mach 0.10 child alone: 40.6 -> 17.2 s. **With `N95_AJJ_SOLVE=BUILTIN` the
+five-Mach print is `halo-ase-sol145` 8cd363e's, line for line (170,034 lines)**;
+with OpenBLAS it differs from it in the same 108 lines as before. NASA's 132
+demonstration decks print as before, but for d01002a, which prints the GINO timing
+constants it measures, and d07022a, which is nondeterministic in the unmodified
+solver too (in 40 runs each of this build, of 8cd363e and of fcd681b, 1 to 3 take
+10 complex decompositions instead of 13).
+
+Tried and dropped: the whole tree at `-O2 -fno-aggressive-loop-optimizations
+-fno-strict-aliasing -fwrapv` (124 of 132 demos differ, 51 segfault - gfortran
+treats dummy arguments as not overlapping at -O1 and above, and open core is
+nothing but overlapping dummies); ATEIG's far updates deferred and applied a block
+of steps at a time (the same bits, slower: the 240-square QR lives in L2 and is
+bound by its dependences, not memory); a larger GINO buffer (SYSBUF) (FEER's modes
+move with it, and it saved nothing); lowering the FA1 children's priority, or the
+shorter Machs' (the long child reaches FA1 sooner and the run ends no sooner: what
+is left is CPU, and a low-priority thread still shares its core's other half).
+
 ### halo-ase-sol145's checkpoint and restart, on Linux
 
 Merged from `halo-ase-sol145` 8cd363e. The POSIX side of it: the problem tape goes
@@ -911,8 +994,11 @@ about g = 0.005, the crossing threshold, at the lowest densities.
 
 ### What is still serial
 
-AMP's per-k work outside the solve (GINO unpack and pack at -O0, AMPC1's copy of each
-AJJ before the in-core solve reads it again, MMA's products) is about 0.3 s per k on
-the main thread, the critical path of the Mach with the most reduced frequencies.
-FA1 is now four fifths the QR; a faster QR (LAPACK's DHSEQR) would be faster but not
-NASA's roots. A marked loop's output is OFP formatting, serial.
+FA1 is now seven tenths of the CPU and nearly all of it NASA's 240-square QR (HSBG +
+ATEIG, 4-5 ms per iteration): the order of its operations is the answer, and it is
+bound by its own dependences. A faster QR (LAPACK's DHSEQR) would not be NASA's
+roots. Each child's setup (the modes, the constraints, the spline) is about 6 s of
+serial -O0 before AMG, and with five children in it at once most of the machine
+waits. Under load the Mach 0.10 child's AMP takes 11-12 s against 3.4 s alone: its
+GINO read chain is serial and shares the machine with the other children's FA1. A
+marked loop's output is OFP formatting, serial.

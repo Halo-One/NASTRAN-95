@@ -310,6 +310,22 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
         "-O2;-fautomatic;-ffp-contract=off")
   endif()
 endif()
+# mis/ampk.f (Halo One, 2026) is AMP's loop on (Mach, k) pairs in core: a
+# pipeline of OpenMP tasks, each pair's GINO reads and writes chained in
+# order on one dependence and everything between them - DJH, the solve,
+# QKH = SKJ QJH, QIH = GKI(T) QKH - done side by side with the serial
+# path's arithmetic, operation for operation. New code, no static locals,
+# no open-core aliasing: -O2 -fautomatic -ffp-contract=off, and OpenMP.
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  if(OpenMP_Fortran_FOUND)
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/ampk.f"
+        PROPERTIES COMPILE_OPTIONS
+        "-O2;-fautomatic;-ffp-contract=off;${OpenMP_Fortran_FLAGS}")
+  else()
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/ampk.f"
+        PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off")
+  endif()
+endif()
 # The solve inside mis/ampcz.f is mis/ampczs/ampczs_lapack.f - LAPACK's
 # ZGETRF + ZGETRS - when NASTRAN_LAPACK_LIBRARIES names a LAPACK to link,
 # and mis/ampczs/ampczs_builtin.f (the threaded, unblocked LU the in-core

@@ -272,6 +272,61 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
         PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic")
   endif()
 endif()
+# The rows of the doublet lattice matrix (Halo One, 2026): mis/gendp.f
+# computes GEND's rows side by side, an OpenMP thread per receiving box,
+# and packs them in GEND's order. What a row calls - dpps, subp, snpdf,
+# incro, tker, idf1, idf2 - is compiled -O2 -fautomatic -ffp-contract=off:
+# their locals on each thread's stack (none has DATA or SAVE, none reads a
+# local it has not set in the same call), and the same arithmetic as at
+# -O0, so the matrix is the same to the bit. tker and incro keep their
+# scratch in /DLM/ and /KDS/, which are THREADPRIVATE; flld and subb, the
+# two other routines that name those commons, carry the same directive and
+# need -fopenmp to read it, or the link mixes a thread-local symbol with
+# an ordinary one. They stay at -O0 -fno-automatic otherwise.
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  set(DLM_ROW_SOURCES "")
+  foreach(f gendp dpps subp snpdf incro tker idf1 idf2)
+    list(APPEND DLM_ROW_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/mis/${f}.f")
+  endforeach()
+  if(OpenMP_Fortran_FOUND)
+    set_source_files_properties(${DLM_ROW_SOURCES} PROPERTIES COMPILE_OPTIONS
+        "-O2;-fautomatic;-ffp-contract=off;${OpenMP_Fortran_FLAGS}")
+    set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/mis/flld.f"
+        "${CMAKE_CURRENT_SOURCE_DIR}/mis/subb.f"
+        PROPERTIES COMPILE_OPTIONS "${OpenMP_Fortran_FLAGS}")
+  else()
+    set_source_files_properties(${DLM_ROW_SOURCES} PROPERTIES COMPILE_OPTIONS
+        "-O2;-fautomatic;-ffp-contract=off")
+  endif()
+endif()
+# The solve inside mis/ampcz.f is mis/ampczs/ampczs_lapack.f - LAPACK's
+# ZGETRF + ZGETRS - when NASTRAN_LAPACK_LIBRARIES names a LAPACK to link,
+# and mis/ampczs/ampczs_builtin.f (the threaded, unblocked LU the in-core
+# solve started with) otherwise. The Linux build script builds OpenBLAS
+# statically for it, DYNAMIC_ARCH (one executable, its kernels chosen at
+# run time for the processor it finds) and threaded with the same OpenMP
+# as the rest, so the driver's OMP_NUM_THREADS per child governs both.
+# The unblocked LU streams the trailing matrix through memory once per
+# column; the blocked one works out of cache at the rate of ZGEMM.
+set(NASTRAN_LAPACK_LIBRARIES "" CACHE STRING
+    "LAPACK/BLAS archive(s) for the in-core doublet lattice solve (AMPCZS)")
+if(NASTRAN_LAPACK_LIBRARIES)
+  set(AMPCZS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mis/ampczs/ampczs_lapack.f")
+  target_link_libraries(nas PUBLIC ${NASTRAN_LAPACK_LIBRARIES})
+else()
+  set(AMPCZS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mis/ampczs/ampczs_builtin.f")
+endif()
+target_sources(nas PRIVATE "${AMPCZS_SOURCE}")
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  if(OpenMP_Fortran_FOUND)
+    set_source_files_properties("${AMPCZS_SOURCE}"
+        PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;${OpenMP_Fortran_FLAGS}")
+  else()
+    set_source_files_properties("${AMPCZS_SOURCE}"
+        PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic")
+  endif()
+endif()
 
 # bd/semdbd.f is NOT excluded, although the upstream CMake build excludes it.
 # It is the only BLOCK DATA in the tree that initialises /XMSSG/ (the "0***

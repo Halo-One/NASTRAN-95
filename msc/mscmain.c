@@ -12,8 +12,6 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <windows.h>
-#define msc_mkdir(p) _mkdir(p)
-#define msc_chdir(p) _chdir(p)
 #else
 /* HALO: the POSIX spellings of what this file asks the operating system
  *   for: its own path, an absolute path for the deck, and make and enter
@@ -31,15 +29,33 @@
 #ifndef MAX_PATH
 #define MAX_PATH PATH_MAX
 #endif
-#define msc_mkdir(p) mkdir((p), 0777)
-#define msc_chdir(p) chdir(p)
 #endif
+
+/* HALO: make and enter a directory, shared with the SOL 145 driver
+ *   (mscflut.c), which starts its children the same way SOL 200 does */
+int msc_mkdir(const char *path)
+{
+#ifdef _WIN32
+    return _mkdir(path);
+#else
+    return mkdir(path, 0777);
+#endif
+}
+
+int msc_chdir(const char *path)
+{
+#ifdef _WIN32
+    return _chdir(path);
+#else
+    return chdir(path);
+#endif
+}
 
 /* HALO: this executable's own path, which SOL 200 needs because it runs
  *   each analysis as a child of itself and argv[0] need not be a path at
  *   all. Windows asks the loader, Linux reads the link the kernel keeps
  *   for every process, macOS has a call of its own. */
-static void msc_self_path(char *buf, size_t n)
+void msc_self_path(char *buf, size_t n)
 {
 #if defined(_WIN32)
     GetModuleFileNameA(NULL, buf, (DWORD) n);
@@ -55,7 +71,7 @@ static void msc_self_path(char *buf, size_t n)
 /* HALO: the deck as an absolute path, because the caller is about to
  *   change directory. Failing that, the name as it was given, which is
  *   what the Windows side did as well. */
-static void msc_abs_path(char *buf, size_t n, const char *in)
+void msc_abs_path(char *buf, size_t n, const char *in)
 {
 #ifdef _WIN32
     if (_fullpath(buf, in, n)) return;

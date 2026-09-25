@@ -124,6 +124,14 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st);
 
 int  msc_sol200(const char *deck, const char *outdir, const char *stem);
 
+/* the operating system calls the two child-process drivers share
+ * (mscmain.c): this executable's own path, a path made absolute, and
+ * make / enter a directory - one spelling per OS behind these          */
+void msc_self_path(char *buf, size_t n);
+void msc_abs_path(char *buf, size_t n, const char *in);
+int  msc_mkdir(const char *path);
+int  msc_chdir(const char *path);
+
 /* the SOL 145 driver (mscflut.c): one child run per subcase, side by side */
 int  msc_flutter_subcases(const msc_deck *d);
 int  msc_sol145(const char *deck, const char *outdir, const char *stem);

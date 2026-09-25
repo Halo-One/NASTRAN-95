@@ -574,6 +574,42 @@ to two thirds of the 57 roots change place at most loops - the low-speed
 end, where the aerodynamic roots and the rigid body roots wander, is where
 the frequency order and the tracked order differ most.
 
+### The eigenvectors at the aero boxes, the aerodynamic loads, and each child at its own Mach
+
+The flutter rigid format recovers the complex eigenvectors at the aero
+points as well: `MPYAD GTKA,CPHIA,/CPHIK` puts the structural vectors
+through the spline onto the k-set and `UMERGE` joins them to the
+structural rows before SDR2, so a DISP set that names the box ids (the
+CAERO1 box numbers) gets one row per box in the COMPLEX EIGENVECTOR
+tables - the plunge in T3 and the pitch in R2, in the box's frame. No
+parameter switches it on; MSC needs PARAM OPPHIPA for the same rows.
+
+The aerodynamic pressures and forces on the boxes are NASA's `AEROF`
+case control request: the ADR module builds P_kf = Q_kh(k, Mach) u_h for
+every recovered root and ADRPRT prints them as `AERODYNAMIC LOADS (UNIT
+DYNAMIC PRESSURE)`, one line per box with the real and imaginary parts of
+T1..T3 and a second with R1..R3. The front end dropped `AEROF` as a
+command it did not know; it keeps it now and writes MSC's `APRES` as
+`AEROF` (or drops it when `AEROF` is asked for already), since NASTRAN-95
+prints pressures and forces together. What still stops the recovery:
+ADR takes the reduced frequency of each root from `BOV`, b/V, which APD
+sets from the AERO card's velocity field - the matched-point decks leave
+it blank, so `BOV = 0.0` and ADR says so (UIM 2272) and prints nothing.
+For the K method b/V is one number per loop; for PK on matched points
+every marked loop has its own velocity, and several loops are usually
+marked in one subcase. The next step is FA1 handing ADR the velocity per
+root (the loop's V, which FA1 knows and FA1PKV prints beside each
+vector) instead of one BOV for the run; until then the animator's
+pressure contour has a reader for ADRPRT's layout and nothing to read.
+
+The parallel driver now gives each child its subcase's Mach, read off
+the FMETHOD's FLUTTER card and its Mach FLFACT (one value on the
+matched-point decks): `PARAM MACH` for the ADR recovery, which takes the
+Mach of the MKAERO1 list closest to it (NASA's default 0.0 took the
+lowest for every subcase), and the MKAERO1 / MKAERO2 lists cut to that
+Mach. A five-Mach deck's children each computed the doublet lattice and
+the solves for all five Machs and used one; they compute one now.
+
 ### What the g-method would take
 
 ZAERO's g-method (Theoretical Manual 7.3; Chen, "Damping perturbation method

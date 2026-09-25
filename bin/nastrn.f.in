@@ -14,6 +14,7 @@ C
       CHARACTER*80    VALUE
       CHARACTER*5     TMP
 C HALO: for the standalone start-up block below
+      CHARACTER*256   OPTPKW, RSDECK
       CHARACTER*256   DECK, STEM, OUTDIR, TMPBAS, SCRD, DFLOG, DFPCH,
      &                DFPLT, DFDIC, DFNPT, DFSOF
       CHARACTER*16    PIDS
@@ -22,7 +23,9 @@ C HALO:   messages are copied to, and what it found out about the run.
       CHARACTER*256   XLAT, MSGF, ARG
       CHARACTER*32    KEY
       LOGICAL         ASEMOD
+      LOGICAL         ASESPL, NODBM
       INTEGER         IRFASE, NDASE, IA, IEQ, IOFF
+      DATA            IRFASE / 0 /
 C HALO: for the watchdog and the MSC-dialect notice
       REAL            WDMIN, TIMMIN
       INTEGER         ISOLN
@@ -145,6 +148,9 @@ C HALO: --cosmic: read the deck as it is, whichever executable this is.
 C HALO:   The SOL 200 driver runs each of its analyses this way, on a
 C HALO:   deck it has already translated.
       IOFF = 0
+      OPTPKW = 'none'
+      RSDECK = ' '
+      CHKPT  = .FALSE.
       IF ( DECK .EQ. '--cosmic' ) THEN
          ASEMOD = .FALSE.
          HASE   = 0
@@ -225,6 +231,24 @@ C HALO:   named on the way past rather than ignored silently.
          CALL HUPPER ( KEY )
          IF ( KEY .EQ. 'OUT' ) THEN
             OUTDIR = ARG(IEQ+1:)
+C HALO: scr=no: keep the checkpoint (MSC keeps its database with it).
+C HALO:   The translated deck gets CHKPNT YES,DISK and the problem tape
+C HALO:   and dictionary stay beside the print file as <stem>.nptp and
+C HALO:   <stem>.dic. restart=<modes deck>: restart from that run's
+C HALO:   checkpoint, with optp=<its output directory> when it had one
+C HALO:   (msc_restart_set). optp=<file> alone: the old problem tape of
+C HALO:   a --cosmic run (the flutter children get it this way).
+         ELSE IF ( KEY .EQ. 'SCR' .OR. KEY .EQ. 'SCRATCH' ) THEN
+            VALUE = ARG(IEQ+1:)
+            CALL HUPPER ( VALUE )
+            IF ( VALUE(1:2) .EQ. 'NO' ) THEN
+               IF ( ASEMOD ) CALL HMSCCK ( 1 )
+               CHKPT = .TRUE.
+            ENDIF
+         ELSE IF ( KEY .EQ. 'RESTART' ) THEN
+            RSDECK = ARG(IEQ+1:)
+         ELSE IF ( KEY .EQ. 'OPTP' ) THEN
+            OPTPKW = ARG(IEQ+1:)
          ELSE
             WRITE (0,'(A,A,A)') 'nastran: ', ARG(1:LEN_TRIM(ARG)),
      &         ' is an MSC launcher keyword; accepted and ignored'
@@ -248,6 +272,23 @@ C HALO:   left beside the print file, and everything the translation
 C HALO:   decided is in <stem>_xlat.txt as well as on the terminal: a
 C HALO:   translation nobody can read is a translation nobody can check.
       IF ( .NOT. ASEMOD ) GO TO 465
+C HALO: a restart: the modes run's dictionary and problem tape, checked
+C HALO:   before anything is translated
+      IF ( RSDECK .NE. ' ' ) THEN
+         CALL HMSCRS ( RSDECK(1:LEN_TRIM(RSDECK)), OPTPKW, IERR )
+         IF ( IERR .NE. 0 ) CALL EXIT ( 3 )
+C HALO:   the solver keeps file names in 80 characters and runs from
+C HALO:   inside the output directory: the tape is hard-linked (or
+C HALO:   copied) there as optp.nptp, and that short name is used
+         IF ( LO .GT. 0 ) THEN
+            CALL HMKDIR ( OUTDIR(1:LO), IERR )
+            CALL HMSCLK ( OUTDIR(1:LO), IERR )
+         ELSE
+            CALL HMSCLK ( '.', IERR )
+         ENDIF
+         IF ( IERR .NE. 0 ) CALL EXIT ( 3 )
+         OPTPKW = 'optp.nptp'
+      ENDIF
       IF ( LO .GT. 0 ) THEN
          CALL HMKDIR ( OUTDIR(1:LO), IERR )
          XLAT = OUTDIR(1:LO) // BSLASH // STEM(1:LS) // '_n95.dat'
@@ -300,7 +341,6 @@ C HALO:   The same pass reads the TIME card (minutes, for the watchdog
 C HALO:   below) and, in the 1970s executable, notices a deck written in
 C HALO:   MSC's dialect - a three-digit SOL, or an INCLUDE - so that the
 C HALO:   fatal it is about to produce can be explained on the way out.
-      CHKPT  = .FALSE.
       TIMMIN = 0
       DO 471 K = 1, 200
          READ ( 5, '(A)', END = 472, ERR = 472 ) VALUE
@@ -456,16 +496,51 @@ C HALO:   A child of the SOL 145 driver (N95_CHILD in the environment)
 C HALO:   solves the same big model with --cosmic and gets the same
 C HALO:   split: on NASA's it ran out inside the decomposition.
       CALL GETENV ( 'N95_CHILD', VALUE )
-      IF ( ASEMOD .OR. VALUE .NE. ' ' ) THEN
+      ASESPL = ASEMOD .OR. VALUE .NE. ' '
+C HALO: a flutter run - AERO 10 out of the translation, or a child of
+C HALO:   the SOL 145 driver - runs with no in-memory database and the
+C HALO:   whole of open core for the modules. NASA's DBM (mds/dbmmgr.f)
+C HALO:   loses the count of an appended file's blocks once the database
+C HALO:   is full: 'BLOCK NUMBERS INCONSISTANT ON OPEN', the FCB a block
+C HALO:   behind the in-memory chain on BXHH, the eigenvalue file FA1
+C HALO:   appends every loop. Every restarted monarch child died there
+C HALO:   at loop 23; the same child with the database off ran to its
+C HALO:   120 summaries. The aerodynamic matrices fill any database and
+C HALO:   spill to disk anyway, so GINO's files lose little. DBMEM in
+C HALO:   the environment still turns it back on.
+      NODBM = VALUE .NE. ' ' .OR. IRFASE .EQ. 10
+      IF ( ASESPL .AND. NODBM ) THEN
+         CALL HDFLTI ( 'OCMEM', LENOPC, IOCMEM )
+         CALL HDFLTI ( 'DBMEM', 0,      IDBLEN )
+      ELSE IF ( ASESPL ) THEN
          CALL HDFLTI ( 'OCMEM', (LENOPC/4)*3, IOCMEM )
          CALL HDFLTI ( 'DBMEM', LENOPC/4,     IDBLEN )
       ELSE
          CALL HDFLTI ( 'OCMEM',  2000000, IOCMEM )
          CALL HDFLTI ( 'DBMEM', 12000000, IDBLEN )
       ENDIF
-      IF ( IOCMEM .LE. LENOPC ) GO TO 10
-      PRINT *,' LARGEST VALUE FOR OPEN CORE ALLOWED IS:',LENOPC
-      CALL MESAGE ( -61, 0, 0 )
+      IF ( IOCMEM .GE. 1 .AND. IOCMEM .LE. LENOPC ) GO TO 10
+C HALO: an OCMEM above the open core the build has was MESAGE -61:
+C HALO:   ERRTRC, END OF JOB and exit 0 with nothing solved, so a run
+C HALO:   that had asked for more memory than there is looked done.
+C HALO:   The default split is used instead and standard error says
+C HALO:   so; more takes a build with a larger NASTRAN_OPEN_CORE_WORDS.
+      WRITE (0,'(A,I12,A,I11,A)') 'nastran: OCMEM ', IOCMEM,
+     &   ' is more than the open core this build has, ', LENOPC,
+     &   ' words'
+      IF ( ASESPL .AND. NODBM ) THEN
+         IOCMEM = LENOPC
+         IDBLEN = 0
+      ELSE IF ( ASESPL ) THEN
+         IOCMEM = (LENOPC/4)*3
+         IDBLEN = LENOPC/4
+      ELSE
+         IOCMEM = 2000000
+         IDBLEN = 12000000
+      ENDIF
+      WRITE (0,'(A,I11,A,I11,A)') 'nastran: using the default, ',
+     &   IOCMEM, ' words for the modules and ', LENOPC - IOCMEM,
+     &   ' for the database (NASTRAN_OPEN_CORE_WORDS sets the total)'
 10    IF ( IDBLEN .NE. 0 ) IDBLEN = LENOPC - IOCMEM
       LASTAD = LOCFX( IZ( IOCMEM ) )
       IF ( IDBLEN .NE. 0 ) IDBADR = LOCFX( IZ( IOCMEM+1 ) )
@@ -486,7 +561,7 @@ C HALO:   split: on NASA's it ran out inside the decomposition.
 20    CONTINUE
       CALL HDFLTC ( 'LOGNM', DFLOG, LOG )
       DSNAMES(3) = LOG
-      CALL HDFLTC ( 'OPTPNM', 'none', OPTP )
+      CALL HDFLTC ( 'OPTPNM', OPTPKW(1:LEN_TRIM(OPTPKW)), OPTP )
       DSNAMES(7)  = OPTP
       CALL HDFLTC ( 'NPTPNM', DFNPT, NPTP )
       DSNAMES(8)  = NPTP
@@ -601,6 +676,16 @@ C HALO: usage, on standard error
       WRITE (0,'(A)') 'output_dir. Punch, plot, dictionary and'
       WRITE (0,'(A)') 'checkpoint files appear only if the deck'
       WRITE (0,'(A)') 'asks for them.'
+      WRITE (0,'(A)') ' '
+      WRITE (0,'(A)') 'Keywords after the deck (nastran95ase):'
+      WRITE (0,'(A)') ' out=<dir>      the output directory'
+      WRITE (0,'(A)') ' scr=no         keep the checkpoint, <stem>'
+      WRITE (0,'(A)') '                .nptp and .dic beside the print'
+      WRITE (0,'(A)') ' restart=<deck> start off that run''s checkpoint'
+      WRITE (0,'(A)') '                (a flutter deck off its modes)'
+      WRITE (0,'(A)') ' optp=<dir>     where that run put them, when'
+      WRITE (0,'(A)') '                it had an output directory'
+      WRITE (0,'(A)') 'MSC''s other keywords: accepted, ignored.'
       WRITE (0,'(A)') ' '
       WRITE (0,'(A)') 'Exit code 0  END OF JOB and no fatal message'
       WRITE (0,'(A)') '          1  bad arguments or a missing file'

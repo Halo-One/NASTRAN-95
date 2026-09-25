@@ -34,6 +34,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <windows.h>
 
 #define ID_LIMIT 16777215      /* 2^24 - 1: NASTRAN packs id*10+component */
 
@@ -1173,6 +1174,281 @@ static void one_aero_subcase(msc_deck *d, int rf)
     d->ncase = second;
 }
 
+/* ------------------------------------------------------------------ */
+/* checkpoint and restart                                              */
+
+static int  g_chkpnt = 0;
+static char g_restart_deck[MSC_PATHLEN];
+static char g_restart_dic[MSC_PATHLEN];
+static char g_restart_nptp[MSC_PATHLEN];
+static char g_restart_prt[MSC_PATHLEN];
+
+void msc_chkpnt_set(int on) { g_chkpnt = on; }
+
+const char *msc_restart_optp(void) { return g_restart_nptp[0] ? g_restart_nptp : NULL; }
+const char *msc_restart_print(void) { return g_restart_prt[0] ? g_restart_prt : NULL; }
+
+/* the modes run's deck, and its dictionary, problem tape and print:
+ * beside the deck (<stem>.dic, <stem>.nptp, <stem>.out, where a run
+ * without an output directory leaves them), or where optp= says - the
+ * output directory the modes run was given, or its tape by name. 0
+ * when the deck, the dictionary and the tape are all there.          */
+int msc_restart_set(const char *modes_deck, const char *optp)
+{
+    char full[MSC_PATHLEN], stem[MSC_PATHLEN], where[MSC_PATHLEN];
+    const char *p, *name;
+    FILE *f;
+    if (!_fullpath(full, modes_deck, sizeof(full))) strncpy(full, modes_deck, sizeof(full) - 1);
+    strncpy(stem, full, sizeof(stem) - 1);
+    stem[sizeof(stem) - 1] = '\0';
+    p = strrchr(stem, '.');
+    if (p && !strchr(p, '\\') && !strchr(p, '/')) stem[p - stem] = '\0';
+    strncpy(g_restart_deck, full, sizeof(g_restart_deck) - 1);
+    msc_tag_letter = 'R';   /* this run's continuation tags, apart from the modes run's */
+
+    /* the deck's own name, for the files in an output directory */
+    name = strrchr(stem, '\\');
+    if (!name) name = strrchr(stem, '/');
+    name = name ? name + 1 : stem;
+
+    if (optp && optp[0] && _stricmp(optp, "none") != 0) {
+        DWORD a;
+        if (!_fullpath(where, optp, sizeof(where))) strncpy(where, optp, sizeof(where) - 1);
+        a = GetFileAttributesA(where);
+        if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) {
+            snprintf(g_restart_dic,  sizeof(g_restart_dic),  "%s\\%s.dic",  where, name);
+            snprintf(g_restart_nptp, sizeof(g_restart_nptp), "%s\\%s.nptp", where, name);
+            snprintf(g_restart_prt,  sizeof(g_restart_prt),  "%s\\%s.out",  where, name);
+        } else {
+            char ws[MSC_PATHLEN];
+            strncpy(g_restart_nptp, where, sizeof(g_restart_nptp) - 1);
+            strncpy(ws, where, sizeof(ws) - 1);
+            ws[sizeof(ws) - 1] = '\0';
+            p = strrchr(ws, '.');
+            if (p && !strchr(p, '\\') && !strchr(p, '/')) ws[p - ws] = '\0';
+            snprintf(g_restart_dic, sizeof(g_restart_dic), "%s.dic", ws);
+            snprintf(g_restart_prt, sizeof(g_restart_prt), "%s.out", ws);
+        }
+    } else {
+        snprintf(g_restart_dic,  sizeof(g_restart_dic),  "%s.dic",  stem);
+        snprintf(g_restart_nptp, sizeof(g_restart_nptp), "%s.nptp", stem);
+        snprintf(g_restart_prt,  sizeof(g_restart_prt),  "%s.out",  stem);
+    }
+    f = fopen(g_restart_deck, "r");
+    if (!f) {
+        msc_msg(MSC_FATAL, 9460, "restart=%s: the modes run's deck is not there.", modes_deck);
+        return 1;
+    }
+    fclose(f);
+    f = fopen(g_restart_dic, "r");
+    if (!f) {
+        msc_msg(MSC_FATAL, 9460,
+            "restart=%s: no dictionary %s. The modes run writes it when it is run\n"
+            "with scr=no (CHKPNT YES,DISK); when that run had an output directory,\n"
+            "optp= names the directory.", modes_deck, g_restart_dic);
+        return 1;
+    }
+    fclose(f);
+    f = fopen(g_restart_nptp, "rb");
+    if (!f) {
+        msc_msg(MSC_FATAL, 9460,
+            "restart=%s: no problem tape %s (the modes run's checkpoint, written\n"
+            "with scr=no).", modes_deck, g_restart_nptp);
+        return 1;
+    }
+    fclose(f);
+    f = fopen(g_restart_prt, "r");
+    if (!f) {
+        msc_msg(MSC_WARN, 9466,
+            "restart: the modes run's print %s is not there, so the flutter print\n"
+            "will carry no REAL EIGENVALUES table (read_khh reads it).", g_restart_prt);
+        g_restart_prt[0] = '\0';
+    } else {
+        fclose(f);
+    }
+    msc_msg(MSC_INFO, 9461,
+        "restart from %s: its dictionary goes into the executive control and\n"
+        "the bulk data carries only the cards that run did not have; the modes\n"
+        "come off %s.", g_restart_deck, g_restart_nptp);
+    return 0;
+}
+
+/* the problem tape under a short name in the output directory: the
+ * solver keeps file names in 80 characters and runs from inside that
+ * directory (the flutter children one level below it). A hard link
+ * when the volume allows, a copy otherwise.                           */
+int msc_restart_link(const char *outdir)
+{
+    char target[MSC_PATHLEN];
+    if (!g_restart_nptp[0]) return 0;
+    snprintf(target, sizeof(target), "%s\\optp.nptp", outdir);
+    DeleteFileA(target);
+    if (CreateHardLinkA(target, g_restart_nptp, NULL)) return 0;
+    if (CopyFileA(g_restart_nptp, target, FALSE)) return 0;
+    msc_msg(MSC_FATAL, 9465, "restart: cannot put the problem tape %s into %s as optp.nptp.",
+            g_restart_nptp, outdir);
+    return 1;
+}
+
+/* the dictionary the modes run punched, RESTART card first, as it is */
+static void write_restart_dictionary(FILE *fp)
+{
+    char line[MSC_LINELEN];
+    FILE *f = fopen(g_restart_dic, "r");
+    int n = 0;
+    if (!f) return;
+    while (fgets(line, sizeof(line), f)) {
+        char *e = line + strlen(line);
+        while (e > line && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = '\0';
+        if (!line[0]) continue;
+        fprintf(fp, "%s\n", line);
+        n++;
+    }
+    fclose(f);
+    msc_msg(MSC_INFO, 9462, "%d dictionary lines from %s in the executive control.", n, g_restart_dic);
+}
+
+/* a card as one string for the comparison: name and every field */
+static unsigned long card_hash(const msc_card *c, char *buf, size_t len)
+{
+    unsigned long h = 1469598103UL;
+    size_t k = 0;
+    int i;
+    const char *p;
+    for (p = c->name; *p && k + 1 < len; p++) buf[k++] = *p;
+    for (i = 1; i <= c->nfld && k + 1 < len; i++) {
+        const char *f = msc_f(c, i);
+        buf[k++] = ',';
+        for (p = f; *p && k + 1 < len; p++) buf[k++] = *p;
+    }
+    buf[k] = '\0';
+    for (p = buf; *p; p++) h = (h ^ (unsigned char) *p) * 16777619UL;
+    return h;
+}
+
+/* the cards of the restart deck that the modes run had already are not
+ * written: NASTRAN takes them from the old problem tape, and a card
+ * given again is a change it would act on. Compared as the translated
+ * cards (the same translation of the same deck lines gives the same
+ * numbering), through a hash set of the modes deck's                  */
+static void drop_cards_of_modes_run(msc_list *out)
+{
+    msc_deck  md;
+    msc_stats st;
+    msc_ctx   y;
+    int       i, n, cap, kept = 0, dropped = 0;
+    unsigned long *tab;
+    char     *keys;
+    char      buf[MSC_LINELEN];
+
+    if (!g_restart_deck[0]) return;
+    if (msc_read(g_restart_deck, &md)) return;
+    memset(&st, 0, sizeof(st));
+    memset(&y, 0, sizeof(y));
+    y.d = &md;
+    y.st = &st;
+    y.next_big = ID_LIMIT;
+    y.unit_mat = 9990;
+    y.auto_set = 9998;
+    y.shift = 0.5;
+    msc_list_init(&y.out);
+    msc_map_init(&y.grid, 4096);
+    msc_map_init(&y.pbush, 64);
+    msc_map_init(&y.pbar, 256);
+    msc_map_init(&y.pshell, 64);
+    msc_map_init(&y.stiff, 4096);
+    msc_map_init(&y.attach, 4096);
+    msc_map_init(&y.constr, 1024);
+    msc_map_init(&y.remap, 256);
+    msc_map_init(&y.held, 256);
+    msc_msg_quiet(1);
+    renumber_pass(&y);
+    scan(&y);
+    translate_bulk(&y);
+    auto_spc(&y);
+    msc_msg_quiet(0);
+
+    /* the hash set of the modes deck's cards (open addressing) */
+    n = y.out.n;
+    cap = 16;
+    while (cap < 2 * n + 16) cap *= 2;
+    tab = (unsigned long *) calloc((size_t) cap, sizeof(unsigned long));
+    keys = (char *) calloc((size_t) cap, MSC_LINELEN);
+    for (i = 0; i < n; i++) {
+        unsigned long h = card_hash(&y.out.c[i], buf, MSC_LINELEN);
+        int k = (int) (h & (unsigned long) (cap - 1));
+        while (tab[k]) k = (k + 1) & (cap - 1);
+        tab[k] = h ? h : 1;
+        strncpy(keys + (size_t) k * MSC_LINELEN, buf, MSC_LINELEN - 1);
+    }
+    for (i = 0; i < out->n; i++) {
+        unsigned long h;
+        int k;
+        if (out->c[i].dropped) continue;
+        h = card_hash(&out->c[i], buf, MSC_LINELEN);
+        k = (int) (h & (unsigned long) (cap - 1));
+        while (tab[k]) {
+            if (tab[k] == (h ? h : 1) && strcmp(keys + (size_t) k * MSC_LINELEN, buf) == 0) {
+                out->c[i].dropped = 1;
+                dropped++;
+                break;
+            }
+            k = (k + 1) & (cap - 1);
+        }
+        if (!out->c[i].dropped) kept++;
+    }
+    free(tab);
+
+    /* a card of this deck that is not an aerodynamic or flutter card is a
+     * change to the structure as far as the restart tables go: GP1 and
+     * everything after it run again, the eigensolution included, and the
+     * restart saves nothing. The usual cause is a modes deck that had not
+     * the aero model's coordinate systems and boxes: the CBUSH springs are
+     * numbered above the highest element id the deck has, which the
+     * CAERO1 boxes move.                                                */
+    {
+        static const char *aero[] = {
+            "AERO", "AEFACT", "CAERO1", "CAERO2", "PAERO1", "PAERO2",
+            "SPLINE1", "SPLINE2", "SET1", "MKAERO1", "MKAERO2", "FLUTTER",
+            "FLFACT", "EIGC", "PARAM", "TABDMP1", "DMI", "DMIG", NULL };
+        char  names[24][10];
+        int   count[24], nn = 0, total = 0, j;
+        for (i = 0; i < out->n; i++) {
+            const char *nm = out->c[i].name;
+            int is_aero = 0;
+            if (out->c[i].dropped) continue;
+            for (j = 0; aero[j]; j++) if (msc_streq(nm, aero[j])) { is_aero = 1; break; }
+            if (is_aero) continue;
+            total++;
+            for (j = 0; j < nn; j++) if (msc_streq(nm, names[j])) { count[j]++; break; }
+            if (j == nn && nn < 24) { strncpy(names[nn], nm, 9); names[nn][9] = '\0'; count[nn++] = 1; }
+        }
+        if (total > 0) {
+            char list[MSC_LINELEN];
+            size_t at = 0;
+            list[0] = '\0';
+            for (j = 0; j < nn && at + 24 < sizeof(list); j++)
+                at += (size_t) snprintf(list + at, sizeof(list) - at, "%s%d %s", j ? ", " : "", count[j], names[j]);
+            msc_msg(MSC_WARN, 9467,
+                "restart: %d cards of this deck that the modes run did not have are\n"
+                "not aerodynamic or flutter cards (%s). NASTRAN takes them as a change\n"
+                "to the structure: an added card runs GP1 on again, the eigensolution\n"
+                "included, and this restart saves nothing; one that replaces a card of\n"
+                "the modes run under the same id is a duplicate (UFM 311). Give the\n"
+                "modes deck the same structural cards, and the aero model's (its\n"
+                "coordinate systems and boxes: a CBUSH's springs are numbered above\n"
+                "the highest element id).",
+                total, list);
+        }
+    }
+    free(keys);
+    msc_list_free(&y.out);
+    msc_free(&md);
+    msc_msg(MSC_INFO, 9463,
+        "restart: %d bulk cards are the modes run's and come off its problem\n"
+        "tape; %d are this deck's own and are written.", dropped, kept);
+}
+
 int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
 {
     msc_ctx     x;
@@ -1262,7 +1538,13 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     fprintf(fp, "APP     %s\n", app);
     fprintf(fp, "SOL     %d,0\n", rf);
     fprintf(fp, "TIME    600\n");
-    msc_op4_alter(fp, rf);
+    if (g_chkpnt) {
+        fprintf(fp, "CHKPNT  YES,DISK\n");
+        msc_msg(MSC_INFO, 9464, "scr=no: CHKPNT YES,DISK - the problem tape and the "
+                "dictionary stay beside the print file for a restart.");
+    }
+    if (g_restart_dic[0]) write_restart_dictionary(fp);
+    else msc_op4_alter(fp, rf);
     fprintf(fp, "CEND\n");
 
     /* ---- case control --------------------------------------------- */
@@ -1308,9 +1590,11 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     fprintf(fp, "BEGIN BULK\n");
 
     /* ---- bulk data ------------------------------------------------- */
+    if (g_restart_deck[0]) drop_cards_of_modes_run(&x.out);
     for (i = 0; i < x.out.n; i++) msc_write_card(fp, &x.out.c[i]);
-    /* the unit-modulus material a translated CBUSH rod refers to */
-    {
+    /* the unit-modulus material a translated CBUSH rod refers to (a
+     * restart has it from the modes run)                              */
+    if (!g_restart_deck[0]) {
         msc_card m;
         memset(&m, 0, sizeof(m));
         strcpy(m.name, "MAT1");

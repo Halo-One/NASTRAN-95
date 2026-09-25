@@ -190,6 +190,18 @@ static void put_field16(FILE *fp, const char *s)
  * a marker beginning with '*' in 73-80 and again in 1-8 of the next
  * line. Every card's field count is a multiple of eight (the reader
  * pads), so a large-field card is always an even number of lines.    */
+/* a restart run's tags begin with this letter (msc_restart_set): the
+ * modes run's cards come off the old problem tape with the tags they
+ * were written with, +0000001 on, and the restart deck's own must not
+ * repeat one of them                                                  */
+char msc_tag_letter = 0;
+
+static void tag_text(char *tag, char lead, unsigned long n)
+{
+    if (msc_tag_letter) snprintf(tag, 9, "%c%c%06lX", lead, msc_tag_letter, n);
+    else                snprintf(tag, 9, "%c%07lX", lead, n);
+}
+
 static void write_large(FILE *fp, const msc_card *c, unsigned long *tagno)
 {
     int  i, k, nf = c->nfld;
@@ -201,7 +213,7 @@ static void write_large(FILE *fp, const msc_card *c, unsigned long *tagno)
     tag[0] = '\0';
     for (i = 1; i <= nf; i += 4) {
         int last = (i + 4 > nf);
-        snprintf(next, sizeof(next), "*%07lX", ++*tagno);
+        tag_text(next, '*', ++*tagno);
         fprintf(fp, "%-8.8s", first ? name : tag);
         for (k = i; k < i + 4; k++) put_field16(fp, msc_f(c, k));
         if (!last) fprintf(fp, "%-8.8s", next);
@@ -218,10 +230,12 @@ static void write_large(FILE *fp, const msc_card *c, unsigned long *tagno)
  * unique across the whole deck, not just within one card. One counter
  * hands them out: +0000001, +0000002, ... Seven hex digits is 268
  * million continuation lines, which no deck this side of the open core
- * limit can reach.
+ * limit can reach. A restart run's begin +R (msc_tag_letter), so that
+ * they cannot repeat the modes run's, which the old problem tape holds.
  */
 void msc_write_card(FILE *fp, const msc_card *c)
 {
+    if (c->dropped) return;
     static unsigned long tagno = 0;
     int  i, k, nf = c->nfld;
     int  first = 1;
@@ -246,7 +260,7 @@ void msc_write_card(FILE *fp, const msc_card *c)
     tag[0] = '\0';
     for (i = 1; i <= nf; i += 8) {
         int last = (i + 8 > nf);
-        snprintf(next, sizeof(next), "+%07lX", ++tagno);
+        tag_text(next, '+', ++tagno);
         fprintf(fp, "%-8.8s", first ? c->name : tag);
         for (k = i; k < i + 8; k++) put_field(fp, msc_f(c, k), c);
         if (!last) fprintf(fp, "%-8.8s", next);

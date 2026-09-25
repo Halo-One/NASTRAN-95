@@ -212,7 +212,13 @@ static HANDLE start_child(const char *full, const char *exe, const char *dir,
     if (k == 0) msc_tally_print();
     snprintf(q1, sizeof(q1), "\"%s\"", deck);
     snprintf(q2, sizeof(q2), "\"%s\"", dir);
-    h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, q2, NULL);
+    if (msc_restart_optp()) {
+        /* the tape the parent linked into the output directory, one
+         * level above the child's own                                 */
+        h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, q2, "optp=..\\optp.nptp", NULL);
+    } else {
+        h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, q2, NULL);
+    }
     if (h == -1) {
         msc_msg(MSC_FATAL, 9452, "could not start the child run for subcase %d: is %s runnable?", id, exe);
         return NULL;

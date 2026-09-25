@@ -108,8 +108,12 @@ static void emit(msc_sev sev, int num, const char *body)
     for (k = 0; k < nout; k++) fflush(out[k]);
 }
 
+static int g_quiet = 0;
+void msc_msg_quiet(int on) { g_quiet = on; }
+
 void msc_msg(msc_sev sev, int num, const char *fmt, ...)
 {
+    if (g_quiet && sev != MSC_FATAL) return;
     char    body[MSC_LINELEN * 2];
     va_list ap;
     va_start(ap, fmt);

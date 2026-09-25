@@ -226,6 +226,17 @@ C HALO:   solved, END OF JOB still prints - so count it as one.
          HFATAL = .TRUE.
          RETURN
       ENDIF
+C HALO:   so are GINO's 'I/O ERROR # n ON FILE ...' (a block it could
+C HALO:   not read or write: the print then dumps the buffer and the
+C HALO:   database directory and END OF JOB follows) and the bare
+C HALO:   'ERRTRC CALLED' a MESAGE fatal or a module's own stop leaves
+C HALO:   when no numbered message came with it. A flutter child of the
+C HALO:   restart work ended that way with exit code 0 and no summary.
+      IF ( INDEX ( LINE, 'I/O ERROR #' ) .GT. 0 .OR.
+     &     INDEX ( LINE, 'ERRTRC CALLED' ) .GT. 0 ) THEN
+         HFATAL = .TRUE.
+         RETURN
+      ENDIF
       L = LEN ( LINE )
       K = 1
 10    J = INDEX ( LINE(K:L), '***' )

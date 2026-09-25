@@ -743,6 +743,14 @@ the clock and date lines excluded) at several thread counts.
   single-precision bit of QJH a marginal PK root (one that ends in the least-squares
   fit, or two roots the tracker could pair either way) lands elsewhere - 108 of the
   monarch print's 170,034 lines.
+* **The gust path in core too** (`mis/ampf.f`, `AMPCZN` in `mis/ampcz.f`). SOL 146's
+  AMPF solved RJH = AJJ^-1 S(K) per (Mach, k) through CFACTR + CFBSOR, the path AMPC
+  left, after the same k-squared walks; it now takes the in-core solve without the
+  transpose and keeps its file positions. The monarch PSD deck reaches data recovery
+  in 75 s instead of hours - and stops there, in SDR2 (SFM 3001, its ELFORCE request)
+  or in RAND2 (SFM 3002, without it): the SOL 146 front end's open end. NASA's AERO 11
+  demos d11031a and d11032a agree with the out-of-core path to 1.4e-4 and 1e-5 of the
+  largest value on each line, and d11031a is nearer NASA's 1995 print than before.
 * **MMA104's inner loops** (`mis/mma10k.f`) at -O2, called from MMA104, which passes
   one open-core array as three dummies and stays at -O0.
 * **The driver shares the processors out by kind of work** (`msc/mscflut.c`). Each

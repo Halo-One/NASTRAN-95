@@ -610,6 +610,129 @@ lowest for every subcase), and the MKAERO1 / MKAERO2 lists cut to that
 Mach. A five-Mach deck's children each computed the doublet lattice and
 the solves for all five Machs and used one; they compute one now.
 
+### The modes once: checkpoint and restart
+
+Every child of the SOL 145 driver solved the eigenproblem again - the
+five-Mach monarch deck five times - because a child is a complete run of
+the AERO rigid format. NASTRAN has had the answer since 1970: checkpoint
+the modes run, restart the flutter off its problem tape. The launcher
+keyword `scr=no` (MSC's, meaning keep the database) checkpoints: the
+translated deck gets `CHKPNT YES,DISK` (the tape form, `CHKPNT YES`, is
+UFM 508 on this build), the dictionary is punched to `<stem>.dic`, and
+the new problem tape is `<stem>.nptp` through `NPTPNM` - which needed
+`mds/gnfiat.f` to actually use the name: its `IPERM` bit was never set,
+so the tape was allocated as a scratch file and deleted with the run.
+`restart=<modes deck>` restarts off that run: the front end reads the
+dictionary into the executive control after the TIME card (RESTART card
+first, as punched), translates the modes deck a second time and drops
+from the restart deck every card whose translated text that run had
+(a hash set of the translated cards - the same translation of the same
+lines gives the same numbering), so only the cards the modes run did not
+have are written: NASTRAN merges them with the old bulk data off the
+tape. The tape is hard-linked (copied when the volume refuses) into the
+output directory as `optp.nptp`, because `DSNAMES` are CHARACTER*80 and
+the children run one directory down. `optp=<dir>` says where the modes
+run left its files when it had an output directory.
+
+Three things the first tries taught:
+
+1. **Continuation tags.** The old bulk data comes back off the tape with
+   the tags the translation wrote it with (`+0000001` on), and the
+   restart deck's own cards were numbered from one again: UFM 208
+   (duplicate parent), 209 (a continuation without a parent), 316
+   (illegal data on the EIGC that had taken the EIGR's `MASS` line). A
+   restart run's tags begin with a letter, `+R000001`.
+2. **What re-solves the modes.** NASTRAN's restart tables re-execute
+   every DMAP statement a changed card type feeds, and a card of the
+   restart deck that the modes run did not have is a change. The monarch
+   restarted off the vibe deck ran GP1 through READ again, 25 minutes as
+   before: the flutter deck's 72 `CELAS2` and 6 `CORD2R` were "new". The
+   CELAS2 are the CBUSH springs, numbered above the highest element id
+   the deck has - which the CAERO1 boxes (7101000 on) move; the CORD2R
+   are the aero model's. So the modes deck the repository writes
+   (`gen_nastran_cards`, `<config>_modes.dat`) carries `aero_model.bdf`
+   with the structure, and holds no flutter cards (a FLFACT or MKAERO1
+   list a flutter run changes must be that run's own). UWM 9467 names
+   the cards when a restart is going to solve the modes anyway - or
+   stop: a card that replaces one of the modes run's under the same id
+   is a duplicate to the merge (UFM 311). With that, the restart deck's own cards are the 64 aero and flutter ones,
+   and the children go straight from GKAM to APD, AMG and AMP; the
+   rigid-format-switch restart (RF3 -> AERO10, `UIM 4145`) is a modified
+   restart NASTRAN handles itself.
+3. **The eigenvalue table.** READ's OFP is skipped with READ, so the
+   flutter print has no `REAL EIGENVALUES` pages and `read_khh` (the
+   generalized stiffnesses the mode ranking wants) reads nothing. The
+   modes run's pages - the consecutive pages from the first that carries
+   the banner, already in MSC's layout - are spliced into the print after
+   each sorted echo (`msc_f06`), where a run of its own prints them.
+
+5. **The restart tables.** NASTRAN re-executes a DMAP statement on a
+   modified restart when a card of one of the statement's `****CARD`
+   bits changed (the table under `$*CARD BITS` in `rf/AERO10`: bit 36
+   is FLFACT / FLUTTER, 34-40 the flutter cards together). FA1 and FA2
+   carry 34-40, so a restart whose own cards are the flutter cards
+   solves the flutter again; VDR, its OFP, the XY section and everything
+   from MODACC to the OFPs of the recovered vectors carried bit 21
+   (AOUT$) alone, which the rigid-format-switch restart does not set -
+   VDR was skipped, NOP kept the tape's value, `COND FINIS,PJUMP`
+   jumped, and the restarted print had the PK modal vectors but no
+   COMPLEX EIGENVECTOR tables. With the recovery re-executed, SDR1
+   stopped in MERGE (SFM 3007): `EQUIV GO,GOD/NOUE/GM,GMD/NOUE` (bits
+   without 34-40) had been skipped as well, and GMD is not on an RF3
+   tape. Every statement from `LABEL VDR` to `LABEL FINIS`, that EQUIV
+   and the PFILE PARAM now carry 34-40 too.
+
+On the two-subcase test deck the joined print of the restart is the
+direct run's to every printed digit: the summaries, the PK modal vectors
+and the physical eigenvectors at the marked points, the merged sorted
+echo the grid reader reads (`test_nastran95ase_flutter_subcases`,
+`decks/two_subcase_modes.dat` holds it). On the monarch the summaries
+agree to six significant figures and not beyond (a 30-mode single-Mach
+deck: 258 of 1,830 rows differ in the seventh digit, damping
+-7.632827E-03 against -7.632829E-03): the modal basis off the tape and
+the one a direct run's READ computes in the same job are FEER's answer
+to the last bit, not to the last printed digit, and the flutter
+solution follows them there. Nothing a crossing can see. A run with a marked point restarted off
+a checkpoint whose modes run had `DISP` output once stopped in MERGE
+(SFM 3007) - the repository's modes deck prints the eigenvectors at the
+elastic axis nodes and the flutter restarts have run clean since; kept
+here as the place to look if it comes back.
+
+4. **The in-memory database.** With the modes off the tape and the
+   restart deck's cards right, every monarch child still died at
+   flutter loop 23, whatever the Mach and whatever the open core (the
+   64M and the 256M builds, a 16M-word database): `BLOCK NUMBERS
+   INCONSISTANT ON OPEN IN DBMMGR`, unit 30 = BXHH, the FCB at block 13
+   and the in-memory chain at 14, then GINO's `I/O ERROR # 0` and the
+   buffer dump. BXHH is CLAMA in the PK path, the eigenvalue file FA1
+   appends every loop (`fa1pke.f`: close without rewind, reopen for
+   write without rewind), and NASA's 1994 in-memory database loses the
+   count of such a file's blocks once the database is full - which the
+   aerodynamic matrices make certain, restart or not; the direct run
+   fills it at a different moment and happens to get through. The
+   same child with `DBMEM=0` ran to its 120 summaries. So a flutter
+   run - AERO 10 out of the translation, or a child of the driver -
+   now runs with no in-memory database and the whole of open core for
+   the modules (`bin/nastrn.f.in`; `DBMEM` in the environment turns it
+   back on). The 30-mode single-Mach monarch deck restarted clean
+   before that change: the failure needs the file to reach the
+   database's edge.
+
+One more verdict came out
+of it: a child that ended in GINO's `I/O ERROR # 0 ON FILE ... NAME=BXHH`
+(a buffer dump, the database directory, END OF JOB) had exit code 0 and
+no summary, so `I/O ERROR #` and a bare `ERRTRC CALLED` now count as
+fatal in `mds/hexit.f`.
+
+And open core: the flutter runs, the studies and the CI had been given
+`OCMEM=256000000` against a 64,000,000-word build, which was `MESAGE
+-61`, `END OF JOB` and exit code 0 - nothing solved, nothing said, and
+the run looked done. The build's open core is 256,000,000 words (1 GB,
+`NASTRAN_OPEN_CORE_WORDS`; a static array below 2 GB with the fixed
+image base, costing nothing until used), the ASE split three quarters to
+the modules, and an `OCMEM` above the total now says so on standard
+error and takes the default split.
+
 ### What the g-method would take
 
 ZAERO's g-method (Theoretical Manual 7.3; Chen, "Damping perturbation method
@@ -769,6 +892,22 @@ the clock and date lines excluded) at several thread counts.
 | + the driver's thread policy | 87 s | 108 lines |
 | + MMA104's loops, the QR at -O3 | 74 s | 108 lines |
 | the same, `N95_AJJ_SOLVE=BUILTIN` | 200 s | identical |
+
+### halo-ase-sol145's checkpoint and restart, on Linux
+
+Merged from `halo-ase-sol145` 8cd363e. The POSIX side of it: the problem tape goes
+into the output directory by `link(2)`, a copy when that fails (`CreateHardLink` /
+`CopyFile`); the directory test is `stat`, `_stricmp` is `strcasecmp`, `_fullpath`
+is `msc_abs_path`; the restarted children get `optp=../optp.nptp` in their argv.
+The direct flutter run is unchanged by the merge line for line (the flutter runs now
+go without the in-memory database; 73.5 s), and the restart flow - the modes once
+with `scr=no`, the flutter deck off them - takes 72 s. The two agree to six
+significant figures, as on Windows, and the speed-ups reproduce each exactly (the
+Mach 0.40 child, every threaded path off against on, restarted and not). But the
+marginal PK roots at the slowest points land differently between the two, and on
+the monarch deck that moves the lowest crossing at Mach 0.30 and 0.40 (4.8 and 7.9
+m/s at 9.8 Hz off the restart, 20.1 and 19.8 m/s at 10.8 Hz direct): a root hovering
+about g = 0.005, the crossing threshold, at the lowest densities.
 
 ### What is still serial
 

@@ -368,7 +368,7 @@ COND     ERROR2,NOEED $
 $$$$
 EQUIV    GO,GOD/NOUE/GM,GMD/NOUE $
 ****SBST   4
-****CARD   1-  4,  6,  9- 11, 13, 14, 24, 56
+****CARD   1-  4,  6,  9- 11, 13- 14, 24, 34- 40, 56
 ****FILE 115
 ****RFMT 199-201,204-217
 $$$$
@@ -436,7 +436,7 @@ APD      EDT,EQDYN,ECT,BGPDT,SILD,USETD,CSTM,GPLD/EQAERO,ECTA,BGPA,SILA,
 $$$$
 PARAM    //*MPY*/PFILE/0/1 $
 ****SBST   7
-****CARD  18
+****CARD  18, 34- 40
 ****FILE 118
 ****RFMT 199-201,204-217
 $$$$
@@ -604,25 +604,25 @@ $$$$
 VDR      CASECC,EQDYN ,USETD,PHIH,CLAMA,,/OPHIH,/*CEIGEN*/*MODAL*/
          123/S,N,NOH/S,N,NOP/FMODE $
 ****SBST   4
-****CARD  21
+****CARD  21, 34- 40
 ****FILE 119
 ****RFMT 199-201,204-217
 $$$$
 COND     LBL16,NOH $
 ****SBST   4
-****CARD  21
+****CARD  21, 34- 40
 ****FILE 119
 ****RFMT 199-201,204-217
 $$$$
 OFP      OPHIH,,,,,//S,N,CARDNO $
 ****SBST   4
-****CARD  21
+****CARD  21, 34- 40
 ****FILE 119
 ****RFMT 199-201,204-217
 $$$$
 LABEL    LBL16 $
 ****SBST   4
-****CARD  18, 21
+****CARD  18, 21, 34- 40
 ****FILE 119
 ****RFMT 199-201,204-217
 $$$$
@@ -666,38 +666,38 @@ LABEL    CONTINUE $
 $$$$
 PARAML   XYCDB//*PRES*////NOXYCDB $
 ****SBST   4
-****CARD  20
+****CARD  20, 34- 40
 ****FILE 120
 ****RFMT 199-201,204-217
 $$$$
 COND     NOXYOUT,NOXYCDB $
 ****SBST   4
-****CARD  20
+****CARD  20, 34- 40
 ****FILE 120
 ****RFMT 199-201,204-217
 $$$$
 XYTRAN   XYCDB,OVG,,,,/XYPLTCE/*VG*/*PSET*/S,N,PFILE/S,N,CARDNO/
          S,N,NOXYPL $
 ****SBST   4
-****CARD  20
+****CARD  20, 34- 40
 ****FILE 120
 ****RFMT 199-201,204-217
 $$$$
 COND     NOXYOUT,NOXYPL $
 ****SBST   4
-****CARD  20
+****CARD  20, 34- 40
 ****FILE 120
 ****RFMT 199-201,204-217
 $$$$
 XYPLOT   XYPLTCE// $
 ****SBST   4
-****CARD  20
+****CARD  20, 34- 40
 ****FILE 120
 ****RFMT 199-201,204-217
 $$$$
 LABEL    NOXYOUT $
 ****SBST   4
-****CARD  20
+****CARD  20, 34- 40
 ****FILE 120
 ****RFMT 199-201,204-217
 $$$$
@@ -722,7 +722,7 @@ $$$$
 ADR      CPHIH1,CASEZZ,QKHL,CLAMAL1,SPLINE,SILA,USETA/PKF/BOV/
          C,Y,MACH = 0.0/*FLUTTER* $
 ****SBST   4
-****CARD  21, 25
+****CARD  21, 25, 34- 40
 ****FILE 121
 ****RFMT 199-201,204-217
 $$$$
@@ -819,29 +819,29 @@ $$$$
 SDR2     CASEZZ,CSTMA,MPT,DIT,EQAERO,SILA,,,BGPA,CLAMAL1,QPAC,CPHIPA,
          EST,,,/,OQPAC1,OCPHIPA,OESC1,OEFC1,PCPHIPA,,/*CEIGN* $
 ****SBST   4
-****CARD   4, 18, 19, 24
+****CARD   4, 18- 19, 24, 34- 40
 ****FILE 137
 $$$$
 OFP      OCPHIPA,OQPAC1,OESC1,OEFC1,,//S,N,CARDNO $
 ****SBST   4
-****CARD  19
+****CARD  19, 34- 40
 ****FILE 137
 $$$$
 COND     FINIS,JUMPPLOT $
 ****SBST   4,  7
-****CARD  18
+****CARD  18, 34- 40
 ****FILE 145
 $$$$
 PLOT     PLTPARA,GPSETSA,ELSETSA,CASEZZ,BGPA,EQAERO,SILGA,,PCPHIPA,,,,
          /PLOTX3/NSIL1/LUSETA/JUMPPLOT/PLTFLG/S,N,
          PFILE $
 ****SBST   4,  7
-****CARD  18
+****CARD  18, 34- 40
 ****FILE 145
 $$$$
 PRTMSG   PLOTX3// $
 ****SBST   4,  7
-****CARD  18
+****CARD  18, 34- 40
 ****FILE 145
 $$$$
 JUMP     FINIS $
@@ -860,44 +860,44 @@ PRTPARM  //-3/*FLUTTER* $
 ****RFMT 187-204,207-217
 $$$$
 LABEL    ERROR2 $
-****CARD   1,  9- 12, 40, 56, 58, 60
+****CARD   1,  9- 12, 34- 40, 56, 58, 60
 ****FILE 111
 ****RFMT 187-204,207-217
 $$$$
 PRTPARM  //-2/*FLUTTER* $
-****CARD   1,  9- 12, 40, 56, 58, 60
+****CARD   1,  9- 12, 34- 40, 56, 58, 60
 ****FILE 111
 ****RFMT 187-204,207-217
 $$$$
 LABEL    ERROR1 $
-****CARD   1-  3,  5,  6,  8, 13, 14, 24
+****CARD   1-  3,  5-  6,  8, 13- 14, 24, 34- 40
 ****FILE 147
 ****RFMT 187-204,207-217
 $$$$
 PRTPARM  //-1/*FLUTTER* $
-****CARD   1-  3,  5,  6,  8, 13, 14, 24
+****CARD   1-  3,  5-  6,  8, 13- 14, 24, 34- 40
 ****FILE 147
 ****RFMT 187-204,207-217
 $$$$
 LABEL    ERROR4 $
 ****SBST   4
-****CARD   1-  6,  8- 14, 24, 58, 59
+****CARD   1-  6,  8- 14, 24, 34- 40, 58- 59
 ****FILE 112
 ****RFMT 187-204,207-217
 $$$$
 PRTPARM  //-4/*FLUTTER* $
 ****SBST   4
-****CARD   1-  6,  8- 14, 24, 58, 59
+****CARD   1-  6,  8- 14, 24, 34- 40, 58- 59
 ****FILE 112
 ****RFMT 187-204,207-217
 $$$$
 LABEL    ERROR5 $
-****CARD   1, 24
+****CARD   1, 24, 34- 40
 ****FILE  94
 ****RFMT 187-204,207-217
 $$$$
 PRTPARM  //-5/*FLUTTER* $
-****CARD   1, 24
+****CARD   1, 24, 34- 40
 ****FILE  94
 ****RFMT 187-204,207-217
 $$$$

@@ -280,7 +280,13 @@ static flut_proc start_child(const char *full, const char *exe, const char *dir,
         intptr_t h;
         snprintf(q1, sizeof(q1), "\"%s\"", deck);
         snprintf(q2, sizeof(q2), "\"%s\"", dir);
-        h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, q2, NULL);
+        if (msc_restart_optp()) {
+            /* the tape the parent linked into the output directory, one
+             * level above the child's own                               */
+            h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, q2, "optp=..\\optp.nptp", NULL);
+        } else {
+            h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, q2, NULL);
+        }
         proc = (h == -1) ? FLUT_NOPROC : (HANDLE) h;
     }
 #else
@@ -291,12 +297,16 @@ static flut_proc start_child(const char *full, const char *exe, const char *dir,
     fflush(NULL);
     proc = fork();
     if (proc == 0) {
-        char *argv[5];
+        char *argv[6];
         argv[0] = (char *) "nastran95ase";
         argv[1] = (char *) "--cosmic";
         argv[2] = deck;
         argv[3] = (char *) dir;
         argv[4] = NULL;
+        /* a restart: the tape the parent linked into the output
+         * directory, one level above the child's own                 */
+        if (msc_restart_optp()) argv[4] = (char *) "optp=../optp.nptp";
+        argv[5] = NULL;
 #ifdef __linux__
         prctl(PR_SET_PDEATHSIG, SIGTERM);
         if (getppid() == 1) _exit(3);          /* the driver is gone already */

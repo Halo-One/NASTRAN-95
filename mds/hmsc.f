@@ -86,6 +86,54 @@ C HALO:   means and what to do, from msc/mscdiag.c. Both executables.
       IFND = CMSCDG ( PRTF(1:LEN_TRIM(PRTF)) // C_NULL_CHAR )
       RETURN
       END
+C HALO: checkpoint and restart through the front end (msc/mscxlat.c):
+C HALO:   HMSCCK turns the CHKPNT card on for the translated deck, HMSCRS
+C HALO:   names the modes run to restart from and gives back the old
+C HALO:   problem tape's path
+      SUBROUTINE HMSCCK ( ION )
+      USE ISO_C_BINDING
+      IMPLICIT NONE
+      INTERFACE
+         SUBROUTINE CMSCCK ( ON ) BIND(C, NAME='msc_chkpnt_set')
+         IMPORT :: C_INT
+         INTEGER(C_INT), VALUE :: ON
+         END SUBROUTINE
+      END INTERFACE
+      INTEGER         ION
+      CALL CMSCCK ( INT ( ION, C_INT ) )
+      RETURN
+      END
+      SUBROUTINE HMSCLK ( OUTD, IERR )
+      USE ISO_C_BINDING
+      IMPLICIT NONE
+      INTERFACE
+         INTEGER(C_INT) FUNCTION CMSCLK ( A )
+     &                           BIND(C, NAME='msc_restart_link')
+         IMPORT :: C_INT, C_CHAR
+         CHARACTER(KIND=C_CHAR), DIMENSION(*), INTENT(IN) :: A
+         END FUNCTION
+      END INTERFACE
+      CHARACTER*(*)   OUTD
+      INTEGER         IERR
+      IERR = CMSCLK ( OUTD(1:LEN_TRIM(OUTD)) // C_NULL_CHAR )
+      RETURN
+      END
+      SUBROUTINE HMSCRS ( MDECK, OPTP, IERR )
+      USE ISO_C_BINDING
+      IMPLICIT NONE
+      INTERFACE
+         INTEGER(C_INT) FUNCTION CMSCRS ( A, B )
+     &                           BIND(C, NAME='msc_restart_set')
+         IMPORT :: C_INT, C_CHAR
+         CHARACTER(KIND=C_CHAR), DIMENSION(*), INTENT(IN) :: A, B
+         END FUNCTION
+      END INTERFACE
+      CHARACTER*(*)   MDECK, OPTP
+      INTEGER         IERR
+      IERR = CMSCRS ( MDECK(1:LEN_TRIM(MDECK)) // C_NULL_CHAR,
+     &                OPTP(1:LEN_TRIM(OPTP)) // C_NULL_CHAR )
+      RETURN
+      END
 C HALO: the results side: rewrite the print file into the layout MSC
 C HALO:   prints, so that a reader written against MSC output reads
 C HALO:   this one. See msc/mscf06.c for what is rewritten and why.

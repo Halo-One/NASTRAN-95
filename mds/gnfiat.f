@@ -184,7 +184,11 @@ C
         DO 30 I =1, 220
         IUNIT( I ) = 0
    30   CONTINUE
-        IF (ANDF(4, IPERM) .EQ. 0) GO TO 40
+C HALO: nothing sets IPERM in this port, so the new problem tape stayed
+C HALO:   scr8 in the scratch directory and no checkpoint survived a run.
+C HALO:   A name given through NPTPNM is taken as the permanent file.
+        IF (ANDF(4, IPERM) .EQ. 0 .AND.
+     &      (NPTP .EQ. ' ' .OR. NPTP .EQ. 'none')) GO TO 40
         MDSNAM( 8 ) = NPTP
    40   MDSNAM( 7 ) = OPTP
         DO 50 I = 1, NPFIST

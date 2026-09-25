@@ -61,6 +61,54 @@ static int has(const char *s, const char *what)
     return strstr(s, what) != NULL;
 }
 
+/* HALO: a restart run's print has no REAL EIGENVALUES table: READ and
+ * the OFP after it are the modes run's, off the problem tape. read_khh
+ * (and rank_flutter_modes through it) read the generalized stiffness
+ * from that table in the flutter print, so the modes run's pages of it
+ * - the consecutive pages from the first that carries the banner, in
+ * the layout that print was already rewritten into - are spliced into
+ * this print after each sorted echo, where a run of its own prints
+ * them. Loaded once per process.                                     */
+static f6buf eig_pages;
+static int   eig_loaded = 0;
+
+static void load_restart_eigenvalues(const char *modes_prt)
+{
+    FILE  *fp;
+    f6buf  page;
+    char   line[F6LINE * 2];
+    int    k, seen = 0, stop = 0;
+
+    eig_loaded = 1;
+    if (!modes_prt) return;
+    fp = fopen(modes_prt, "r");
+    if (!fp) return;
+    memset(&page, 0, sizeof(page));
+    while (!stop) {
+        int got = fgets(line, sizeof(line), fp) != NULL;
+        if (got) rstripn(line);
+        /* a page ends at the next page eject, or at the end of the file */
+        if ((!got || line[0] == '1') && page.n > 0) {
+            int is_table = 0;
+            for (k = 0; k < page.n && !is_table; k++)
+                if (has(page.line[k], "R E A L   E I G E N V A L U E S")) is_table = 1;
+            if (is_table) {
+                for (k = 0; k < page.n; k++) put(&eig_pages, page.line[k]);
+                seen = 1;
+            } else if (seen) {
+                stop = 1;
+            }
+            for (k = 0; k < page.n; k++) free(page.line[k]);
+            page.n = 0;
+        }
+        if (!got) break;
+        put(&page, line);
+    }
+    for (k = 0; k < page.n; k++) free(page.line[k]);
+    free(page.line);
+    fclose(fp);
+}
+
 /* "0.0" and "-0.0" as MSC writes them. The column width is kept: the
  * token is replaced in place and the line stays aligned.              */
 static void zeros_to_e(char *s)
@@ -231,6 +279,8 @@ int msc_f06(const char *path)
     int    i, in_vector = 0, have_cyc = 0;
     int    skip_vector = 0, in_table = 0, gpwg_rows = 0;
     int    is_state = 0, is_rows = 0;      /* the I(S) block under the weights */
+    int    after_enddata = 0;              /* the modes run's eigenvalue pages go here */
+    const char *modes_prt = msc_restart_print();
 
     memset(&b, 0, sizeof(b));
     cyc[0] = '\0';
@@ -239,6 +289,21 @@ int msc_f06(const char *path)
     if (!fp) return 1;
     while (fgets(line, sizeof(line), fp)) {
         rstripn(line);
+
+        /* ---- a restart: the modes run's eigenvalue table ---------- */
+        if (modes_prt) {
+            if (after_enddata && line[0] == '1') {
+                int k;
+                if (!eig_loaded) load_restart_eigenvalues(modes_prt);
+                for (k = 0; k < eig_pages.n; k++) put(&b, eig_pages.line[k]);
+                after_enddata = 0;
+            }
+            {
+                const char *t = line;
+                while (*t == ' ') t++;
+                if (strcmp(t, "ENDDATA") == 0) after_enddata = 1;
+            }
+        }
 
         if (cyclic_from(line, cyc)) have_cyc = 1;
 

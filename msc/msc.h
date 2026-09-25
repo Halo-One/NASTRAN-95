@@ -66,6 +66,7 @@ typedef struct {
 typedef enum { MSC_INFO = 0, MSC_WARN = 1, MSC_FATAL = 2 } msc_sev;
 
 void msc_msg(msc_sev sev, int num, const char *fmt, ...);
+void msc_msg_quiet(int on);                /* the messages held (a side translation) */
 void msc_msg_at(msc_sev sev, int num, const msc_card *c, const char *fmt, ...);
 int  msc_nfatal(void);
 int  msc_nwarn(void);
@@ -121,6 +122,15 @@ typedef struct {
 } msc_stats;
 
 int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st);
+
+/* checkpoint and restart (mscxlat.c): a checkpointed run writes CHKPNT
+ * YES,DISK; a restart writes the RESTART dictionary of the modes run
+ * and only the bulk cards that run did not have                       */
+void msc_chkpnt_set(int on);
+extern char msc_tag_letter;   /* continuation tags' letter, 'R' on a restart */
+int  msc_restart_set(const char *modes_deck, const char *optp);
+const char *msc_restart_print(void);   /* the modes run's print, on a restart */
+const char *msc_restart_optp(void);
 
 int  msc_sol200(const char *deck, const char *outdir, const char *stem);
 

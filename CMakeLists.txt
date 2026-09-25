@@ -393,6 +393,16 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mds/n95fast.f"
       PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic")
 endif()
+# mis/n95twin.f (Halo One, 2026): the inner loops of the setup that take
+# its time - DECOMP's and MMA112's inner products, FERXTD's
+# reorthogonalisation - as calls to optimised copies of themselves, the
+# same operations in the same order (-O2 -ffp-contract=off, the
+# accumulator in a register instead of memory). Their callers keep the
+# loops, and take them when a sum could be one of its own terms.
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/n95twin.f"
+      PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off")
+endif()
 # The hot kernels a second time, for x86-64-v3 (Halo One, 2026): the PK
 # method's QR and products (mis/fa1pkq.f), its eigenvector solve
 # (mis/egnvct.f) and the doublet-lattice kernel for a batch of reduced

@@ -936,6 +936,9 @@ whole against `halo-ase-sol145` 8cd363e.
   compressor-blade theory, do call libmvec; the doublet lattice does not.)
 * **FA1PKG with its loops swapped** (`mis/fa1pkq.f`): J innermost instead of K, every
   C(I,J) the same sum in the same order, the inner loop contiguous. 449 -> 80 us.
+  And HSBG's loop 300 (row L times each column, a long dependent sum per column)
+  eight columns at a time: eight independent sums in their own orders, 12 % off the
+  QR.
 * **The kernels twice, for x86-64-v3** (`msc/mscisa.c`, CMake). `fa1pkq.f`,
   `egnvct.f` and `tkerv.f` are compiled for the baseline and, under V3 names CMake
   makes from the same source, with `-march=x86-64-v3`; each hands over to its V3

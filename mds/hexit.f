@@ -151,9 +151,9 @@ C HALO:   that is true and useless. Say what actually happened.
          CALL HMSG ( ' ' )
          CALL HMSG ( 'nastran: this deck is written in MSC Nastran''s '
      &      // 'dialect (SOL 1xx, INCLUDE, free-field cards).' )
-         CALL HMSG ( '         nastran95.exe reads only the 1970s '
+         CALL HMSG ( '         nastran95 reads only the 1970s '
      &      // 'input NASA wrote it for; run the same deck with' )
-         CALL HMSG ( '         nastran95ase.exe, which translates the '
+         CALL HMSG ( '         nastran95ase, which translates the '
      &      // 'MSC dialect and writes MSC-layout output.' )
       ENDIF
 40    CONTINUE

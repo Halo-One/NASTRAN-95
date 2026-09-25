@@ -147,6 +147,17 @@ endif()
 if(NASTRAN_BUILD_ID MATCHES "'")
   message(FATAL_ERROR "NASTRAN_BUILD_ID may not contain an apostrophe")
 endif()
+# @NASTRAN_PATH_SEP@ is the character code of the separator the main
+# program joins an output directory to a file name with: 92 on Windows,
+# 47 everywhere else. It is substituted rather than tested at run time
+# because this Fortran is compiled without the C preprocessor, and a
+# wrong one is silent -- the directory becomes part of the file name.
+if(WIN32)
+  set(NASTRAN_PATH_SEP "92")
+else()
+  set(NASTRAN_PATH_SEP "47")
+endif()
+
 # @NASTRAN_ASE_MODE@ is the other: one template, two main programs. The
 # plain one reads the input NASA wrote the solver for; the ASE one reads the
 # MSC dialect. Same solver, same arithmetic, different front door.
@@ -292,10 +303,38 @@ set_target_properties(nastran nastranase nasthelp nastplot ff chkfil PROPERTIES
 # to a solver they have validated.
 option(NASTRAN_STATIC_RUNTIME
        "Link libgfortran/libgcc statically so the executables stand alone" ON)
+#
+# On Linux the same flag folds glibc in as well, and the result runs on any
+# distribution without so much as a libgfortran installed. Apple ships no
+# static libSystem, so there -static cannot link at all and only the
+# compiler's own runtime is folded in; libSystem is on every Mac anyway.
 if(NASTRAN_STATIC_RUNTIME AND CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  if(APPLE)
+    set(NASTRAN_STATIC_FLAGS -static-libgfortran -static-libgcc)
+  else()
+    set(NASTRAN_STATIC_FLAGS -static -static-libgfortran -static-libgcc)
+  endif()
   foreach(target nastran nastranase nasthelp nastplot ff chkfil hrfgen)
-    target_link_options(${target} PRIVATE
-                        -static -static-libgfortran -static-libgcc)
+    target_link_options(${target} PRIVATE ${NASTRAN_STATIC_FLAGS})
+  endforeach()
+endif()
+
+# --- addresses have to stay inside 32 bits (ELF) ----------------------------
+# The Windows link pins the image base at 0x400000 and turns ASLR off. This
+# is the same requirement spelled for ELF, and it is no more cosmetic here:
+# LOCFX (mds/mapfns.f) returns LOC(I)/4 into a default INTEGER and KORSZ
+# subtracts two of those, so open core -- a 256 MB static array -- has to sit
+# below 2 GB. A position-independent executable is loaded at 0x55... on
+# Linux, where that subtraction is nonsense and every module is handed the
+# wrong amount of core. -no-pie puts the image back at 0x400000, which is
+# where the PE build sits. The honest fix is still to make open core
+# ALLOCATABLE and rework LOCFX, and it is still a refactor, not a flag.
+if(UNIX AND NOT APPLE AND CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  foreach(target nas nastran nastranase nasthelp nastplot ff chkfil hrfgen)
+    target_compile_options(${target} PRIVATE -fno-pie)
+  endforeach()
+  foreach(target nastran nastranase nasthelp nastplot ff chkfil hrfgen)
+    target_link_options(${target} PRIVATE -no-pie)
   endforeach()
 endif()
 

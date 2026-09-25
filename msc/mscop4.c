@@ -181,8 +181,16 @@ int msc_op4_scan(msc_deck *d)
         }
         reqs[k].n95unit = 11 + k;
         snprintf(reqs[k].temp, sizeof(reqs[k].temp), "op4_unit%d.tmp", reqs[k].n95unit);
+#ifdef _WIN32
         snprintf(env, sizeof(env), "FTN%d=%s", reqs[k].n95unit, reqs[k].temp);
         _putenv(env);
+#else
+        /* HALO: setenv, not putenv. POSIX putenv keeps the caller's
+         *   string rather than copying it, and this one is a local
+         *   buffer that is gone long before the solver reads FTNnn. */
+        snprintf(env, sizeof(env), "FTN%d", reqs[k].n95unit);
+        setenv(env, reqs[k].temp, 1);
+#endif
         msc_msg(MSC_INFO, 9124,
             "OUTPUT4 %s -> unit %d -> %s: written by NASTRAN-95 as %s (unit %d)\n"
             "and rewritten into MSC's formatted OUTPUT4 layout on the way out.",

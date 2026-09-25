@@ -29,7 +29,14 @@
 #include "mscopt.h"
 #include <ctype.h>
 #include <math.h>
+#ifdef _WIN32
 #include <process.h>
+#else
+/* HALO: fork/exec/wait, the POSIX shape of the _spawnl below */
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -300,12 +307,41 @@ static int run_analysis(opt_runner *R, msc_deck *d, const char *tag,
     snprintf(prt,  sizeof(prt),  "%s_%s.out", R->stem, tag);
     if (msc_translate_deck(d, deck, st)) return 1;
     R->nruns++;
+#ifdef _WIN32
     {
+        /* the child re-parses its own command line, so a path with a
+         * space in it has to arrive quoted */
         char q1[MSC_PATHLEN + 4], q2[MSC_PATHLEN + 4];
         snprintf(q1, sizeof(q1), "\"%s\"", deck);
         snprintf(q2, sizeof(q2), "\"%s\"", R->outdir);
         rc = (int) _spawnl(_P_WAIT, R->exe, "nastran95ase", "--cosmic", q1, q2, NULL);
     }
+#else
+    /* HALO: the same child, started the POSIX way. The arguments reach it
+     *   exactly as they are written here -- nothing re-parses them -- so
+     *   they are deliberately NOT quoted: a quote would become part of
+     *   the file name. -1 for anything that stops the child running,
+     *   which is what _spawnl returns and what the caller tests for. */
+    {
+        pid_t pid;
+        int   status;
+        pid = fork();
+        if (pid == 0) {
+            char *argv[5];
+            argv[0] = (char *) "nastran95ase";
+            argv[1] = (char *) "--cosmic";
+            argv[2] = (char *) deck;
+            argv[3] = (char *) R->outdir;
+            argv[4] = NULL;
+            execv(R->exe, argv);
+            _exit(127);
+        }
+        if (pid < 0)                           rc = -1;
+        else if (waitpid(pid, &status, 0) < 0) rc = -1;
+        else if (WIFEXITED(status))            rc = WEXITSTATUS(status);
+        else                                   rc = -1;
+    }
+#endif
     if (rc < 0) {
         msc_msg(MSC_FATAL, 9410, "could not start the analysis %s: is %s "
                 "runnable?", deck, R->exe);

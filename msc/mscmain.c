@@ -6,11 +6,70 @@
  */
 #include "msc.h"
 #include "mscopt.h"
-#include <direct.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <direct.h>
 #include <windows.h>
+#define msc_mkdir(p) _mkdir(p)
+#define msc_chdir(p) _chdir(p)
+#else
+/* HALO: the POSIX spellings of what this file asks the operating system
+ *   for: its own path, an absolute path for the deck, and make and enter
+ *   a directory. 0777 on the mkdir and let the umask decide, as mkdir(1)
+ *   does -- these are the user's own output files, unlike the scratch
+ *   directory mds/hosunx.f makes at 0700. */
+#include <limits.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <stdint.h>
+#endif
+#ifndef MAX_PATH
+#define MAX_PATH PATH_MAX
+#endif
+#define msc_mkdir(p) mkdir((p), 0777)
+#define msc_chdir(p) chdir(p)
+#endif
+
+/* HALO: this executable's own path, which SOL 200 needs because it runs
+ *   each analysis as a child of itself and argv[0] need not be a path at
+ *   all. Windows asks the loader, Linux reads the link the kernel keeps
+ *   for every process, macOS has a call of its own. */
+static void msc_self_path(char *buf, size_t n)
+{
+#if defined(_WIN32)
+    GetModuleFileNameA(NULL, buf, (DWORD) n);
+#elif defined(__APPLE__)
+    uint32_t sz = (uint32_t) n;
+    if (_NSGetExecutablePath(buf, &sz) != 0) buf[0] = '\0';
+#else
+    ssize_t k = readlink("/proc/self/exe", buf, n - 1);
+    buf[k > 0 ? (size_t) k : (size_t) 0] = '\0';
+#endif
+}
+
+/* HALO: the deck as an absolute path, because the caller is about to
+ *   change directory. Failing that, the name as it was given, which is
+ *   what the Windows side did as well. */
+static void msc_abs_path(char *buf, size_t n, const char *in)
+{
+#ifdef _WIN32
+    if (_fullpath(buf, in, n)) return;
+#else
+    char tmp[PATH_MAX];
+    if (realpath(in, tmp)) {
+        strncpy(buf, tmp, n - 1);
+        buf[n - 1] = '\0';
+        return;
+    }
+#endif
+    strncpy(buf, in, n - 1);
+    buf[n - 1] = '\0';
+}
 
 int msc_run(const char *in, const char *out, const char *msgfile, int *rf,
             int *nmodes)
@@ -78,11 +137,11 @@ int msc_sol200(const char *deck, const char *outdir, const char *stem)
 {
     char exe[MAX_PATH], full[MAX_PATH], msg[MSC_PATHLEN];
     int  rc;
-    GetModuleFileNameA(NULL, exe, sizeof(exe));
-    if (!_fullpath(full, deck, sizeof(full))) strncpy(full, deck, sizeof(full) - 1);
+    msc_self_path(exe, sizeof(exe));
+    msc_abs_path(full, sizeof(full), deck);
     if (outdir && *outdir && !(outdir[0] == '.' && outdir[1] == '\0')) {
-        _mkdir(outdir);
-        if (_chdir(outdir) != 0) {
+        msc_mkdir(outdir);
+        if (msc_chdir(outdir) != 0) {
             fprintf(stderr, "nastran: cannot use output directory %s\n", outdir);
             return 1;
         }

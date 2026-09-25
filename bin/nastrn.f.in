@@ -28,12 +28,16 @@ C HALO: for the watchdog and the MSC-dialect notice
       INTEGER         ISOLN
       CHARACTER*256   WDNOTE
       LOGICAL         THERE, ISATTY, CHKPT
-C HALO: a backslash literal, written as CHAR(92). gfortran does not treat a
-C HALO:   backslash as an escape by default, so the obvious spelling is a
-C HALO:   TWO character string that can never equal one character -- and
-C HALO:   every path on Windows is spelled with backslashes, so a
-C HALO:   directory scan written that way silently finds no separator.
-      CHARACTER*1     BSLASH
+C HALO: the separator this build joins path names with, as a character
+C HALO:   code: 92 on Windows, 47 everywhere else, decided by CMake
+C HALO:   (@NASTRAN_PATH_SEP@ below). A code rather than a literal because
+C HALO:   gfortran does not treat a backslash as an escape by default, so
+C HALO:   the obvious spelling of one is a TWO character string that can
+C HALO:   never equal one character. Decided at build time because this
+C HALO:   source is compiled without the C preprocessor -- and getting it
+C HALO:   wrong is silent: the output directory becomes part of the file
+C HALO:   name instead of a directory to write into.
+      CHARACTER*1     PSEP
       INTEGER         NARG, LD, LS, LO, LT, LP, K, KS, IERR, IPID, IOS
       INTEGER         SPERLK
       REAL            SYSTM(94)
@@ -97,7 +101,7 @@ C HALO:     * the exit handler in mds/hexit.f is registered, and removes
 C HALO:       the scratch directory and sets the exit code on every way out
 C HALO:
 C HALO:       nastran wing.inp              -> wing.out, wing.log beside it
-C HALO:       nastran wing.inp C:\runs      -> in C:\runs
+C HALO:       nastran wing.inp C:\runs      -> in C:\runs (/runs on POSIX)
 C HALO:
       HMODE  = 0
       HDIRMK = 0
@@ -105,7 +109,7 @@ C HALO:
       HPRTF  = ' '
       HSTEM  = ' '
       HOUTD  = ' '
-      BSLASH = CHAR(92)
+      PSEP   = CHAR(@NASTRAN_PATH_SEP@)
 C HALO: the run log defaults to a real file, not to 'none'. Unit 3 is only
 C HALO:   OPENed when its name is not 'none', and NASTRAN writes to it
 C HALO:   regardless -- so leaving it unset makes gfortran invent a file
@@ -180,7 +184,7 @@ C HALO:   nothing while it waits for someone to type a bulk data deck.
 C HALO: the deck's directory, and its name without the extension
       KS = 0
       DO 42 K = LD, 1, -1
-         IF ( DECK(K:K) .EQ. '/' .OR. DECK(K:K) .EQ. BSLASH ) THEN
+         IF ( DECK(K:K) .EQ. '/' .OR. DECK(K:K) .EQ. PSEP ) THEN
             KS = K
             GO TO 43
          ENDIF
@@ -237,7 +241,7 @@ C HALO: a bare drive letter is that drive's current directory to C;
 C HALO:   its root is what was meant
       IF ( LO .GT. 0 ) THEN
          IF ( OUTDIR(LO:LO) .EQ. ':' ) THEN
-            OUTDIR(LO+1:LO+1) = BSLASH
+            OUTDIR(LO+1:LO+1) = PSEP
             LO = LO + 1
          ENDIF
       ENDIF
@@ -250,8 +254,8 @@ C HALO:   translation nobody can read is a translation nobody can check.
       IF ( .NOT. ASEMOD ) GO TO 465
       IF ( LO .GT. 0 ) THEN
          CALL HMKDIR ( OUTDIR(1:LO), IERR )
-         XLAT = OUTDIR(1:LO) // BSLASH // STEM(1:LS) // '_n95.dat'
-         MSGF = OUTDIR(1:LO) // BSLASH // STEM(1:LS) // '_xlat.txt'
+         XLAT = OUTDIR(1:LO) // PSEP // STEM(1:LS) // '_n95.dat'
+         MSGF = OUTDIR(1:LO) // PSEP // STEM(1:LS) // '_xlat.txt'
       ELSE
          XLAT = STEM(1:LS) // '_n95.dat'
          MSGF = STEM(1:LS) // '_xlat.txt'
@@ -332,8 +336,8 @@ C HALO:   and only ever sees the stem.
      &   OUTDIR(1:LO)
       CALL EXIT ( 1 )
 48    HOUTD = OUTDIR(1:LO)
-      IF ( OUTDIR(LO:LO) .NE. BSLASH .AND. OUTDIR(LO:LO) .NE. '/' )
-     &   HOUTD(LO+1:LO+1) = BSLASH
+      IF ( OUTDIR(LO:LO) .NE. PSEP .AND. OUTDIR(LO:LO) .NE. '/' )
+     &   HOUTD(LO+1:LO+1) = PSEP
 49    CONTINUE
       DFLOG = STEM(1:LS) // '.log'
       DFPCH = STEM(1:LS) // '.pch'

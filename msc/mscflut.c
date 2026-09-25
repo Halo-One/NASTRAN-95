@@ -22,7 +22,9 @@
  * - would repeat the modes and the whole aerodynamic matrix set for a few
  * seconds of PK iteration each, forty times over, so it is not offered.  */
 #include "msc.h"
+#include <ctype.h>
 #include <direct.h>
+#include <math.h>
 #include <process.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,6 +74,103 @@ static void keep_subcase(msc_deck *d, const int *at, int n, int k)
     d->ncase = j;
 }
 
+/* the Mach of a one-subcase deck: its FMETHOD's FLUTTER card names the
+ * Mach FLFACT list, and one value there (the matched-point decks, PKNL
+ * / PARAM PKMATCH) is the Mach of every point of the child. -1 when the
+ * list has several Machs, a THRU form, or the subcase has no FMETHOD   */
+static double subcase_mach(const msc_deck *d)
+{
+    int    i, j, fmethod = 0, mach_set = 0;
+    double m = -1.0;
+    for (i = 0; i < d->ncase; i++) {
+        char up[MSC_LINELEN];
+        const char *p = d->cases[i], *e;
+        while (*p == ' ' || *p == '\t') p++;
+        strncpy(up, p, sizeof(up) - 1);
+        up[sizeof(up) - 1] = '\0';
+        msc_upper(up);
+        if (strncmp(up, "FMETHOD", 7) == 0 && (e = strchr(up, '=')) != NULL)
+            fmethod = atoi(e + 1);
+    }
+    if (!fmethod) return -1.0;
+    for (i = 0; i < d->nbulk; i++) {
+        const msc_card *c = &d->bulk[i];
+        if (msc_streq(c->name, "FLUTTER") && msc_fi(c, 1, 0) == fmethod) {
+            mach_set = msc_fi(c, 4, 0);
+            break;
+        }
+    }
+    if (!mach_set) return -1.0;
+    for (i = 0; i < d->nbulk; i++) {
+        const msc_card *c = &d->bulk[i];
+        if (!msc_streq(c->name, "FLFACT") || msc_fi(c, 1, 0) != mach_set) continue;
+        for (j = 2; j <= c->nfld; j++) {
+            const char *f = msc_f(c, j);
+            double v;
+            if (!f[0]) continue;
+            if (!isdigit((unsigned char) f[0]) && f[0] != '.' && f[0] != '-' && f[0] != '+')
+                return -1.0;                       /* F1 THRU FNF NF FMID */
+            v = msc_fd(c, j, -1.0);
+            if (m < 0.0) m = v;
+            else if (fabs(v - m) > 1e-6) return -1.0;
+        }
+    }
+    return m;
+}
+
+/* the child's deck at its Mach: PARAM MACH for the aerodynamic loads
+ * (ADR takes the Mach of the MKAERO1 list closest to PARAM MACH; NASA's
+ * default 0.0 takes the lowest, the wrong one for every other subcase),
+ * and the MKAERO1 / MKAERO2 lists cut to that Mach, so the child computes
+ * the aerodynamic matrices it uses rather than every Mach of the deck -
+ * on a five-Mach deck five times the doublet lattice and the solves    */
+static void child_at_mach(msc_deck *d, int id)
+{
+    double m = subcase_mach(d);
+    int    i, j, cut = 0;
+    msc_card *p;
+    if (m < 0.0) return;
+    p = msc_bulk_add(d, "PARAM");
+    msc_set(p, 1, "MACH");
+    msc_setd(p, 2, m);
+    for (i = 0; i < d->nbulk; i++) {
+        msc_card *c = &d->bulk[i];
+        if (msc_streq(c->name, "MKAERO1")) {
+            /* fields 1-8 the Machs, 9-16 the k list shared by all of them */
+            char keep[MSC_FLDLEN] = "";
+            for (j = 1; j <= 8 && j <= c->nfld; j++) {
+                if (msc_blank(c, j)) continue;
+                if (fabs(msc_fd(c, j, -9.0) - m) <= 1e-6) strncpy(keep, msc_f(c, j), MSC_FLDLEN - 1);
+                else cut++;
+            }
+            for (j = 1; j <= 8 && j <= c->nfld; j++) msc_set(c, j, "");
+            if (keep[0]) msc_set(c, 1, keep);
+            else c->dropped = 1;                   /* no Mach of this child on it */
+        } else if (msc_streq(c->name, "MKAERO2")) {
+            /* pairs m k, the pairs at this Mach packed to the front */
+            int n = 0;
+            for (j = 1; j + 1 <= c->nfld; j += 2) {
+                if (msc_blank(c, j)) continue;
+                if (fabs(msc_fd(c, j, -9.0) - m) <= 1e-6) {
+                    char mk[MSC_FLDLEN], kk[MSC_FLDLEN];
+                    strncpy(mk, msc_f(c, j), MSC_FLDLEN - 1);     mk[MSC_FLDLEN - 1] = '\0';
+                    strncpy(kk, msc_f(c, j + 1), MSC_FLDLEN - 1); kk[MSC_FLDLEN - 1] = '\0';
+                    msc_set(c, 2 * n + 1, mk);
+                    msc_set(c, 2 * n + 2, kk);
+                    n++;
+                } else cut++;
+            }
+            for (j = 2 * n + 1; j <= c->nfld; j++) msc_set(c, j, "");
+            if (!n) c->dropped = 1;
+        }
+    }
+    msc_msg(MSC_INFO, 9455,
+        "subcase %d runs at Mach %g: PARAM MACH %g for the aerodynamic loads\n"
+        "(AEROF), and the MKAERO1 / MKAERO2 lists cut to that Mach (%d other\n"
+        "Mach entries dropped), so this child computes only the aerodynamic\n"
+        "matrices it uses.", id, m, m, cut);
+}
+
 static int copy_file(FILE *to, const char *path)
 {
     char  buf[65536];
@@ -99,6 +198,7 @@ static HANDLE start_child(const char *full, const char *exe, const char *dir,
     if (msc_read(full, &d)) return NULL;
     find_subcases(&d, at, FLUT_MAXSUB);
     keep_subcase(&d, at, n, k);
+    child_at_mach(&d, id);
     /* msc_translate zeroes the tallies before translating; a translation
      * called directly must too, or a stray autospc count selects an SPC
      * set that was never written and the child dies in GP4            */

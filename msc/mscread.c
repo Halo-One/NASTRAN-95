@@ -51,6 +51,16 @@ static void push_line(char ***arr, int *n, int *cap, const char *s)
 }
 
 static msc_card *push_card(msc_deck *d, const char *name, int line,
+                           const char *file);
+
+/* a card added to a deck read already (the drivers edit a deck before
+ * translating it); no line or file to name in messages               */
+msc_card *msc_bulk_add(msc_deck *d, const char *name)
+{
+    return push_card(d, name, 0, NULL);
+}
+
+static msc_card *push_card(msc_deck *d, const char *name, int line,
                            const char *file)
 {
     msc_card *c;

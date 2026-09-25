@@ -79,6 +79,7 @@ int  msc_watchdog(double minutes, const char *note);   /* msc/mscwatch.c */
 /* ------------------------------------------------------------------ */
 /* reading (mscread.c) */
 int  msc_read(const char *path, msc_deck *d);
+msc_card *msc_bulk_add(msc_deck *d, const char *name);   /* a card appended */
 void msc_free(msc_deck *d);
 
 /* field access: never out of range, always NUL terminated, trimmed.

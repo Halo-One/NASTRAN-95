@@ -91,11 +91,15 @@ static const char *case_keep[] = {
     "XYPRINT", "XYPLOT", "XYPEAK", "XYPAPLOT", "XTITLE", "YTITLE",
     "XAXIS", "YAXIS", "XGRID", "YGRID", "TCURVE", "CURVELINESYMBOL",
     "DISPLACEMENT", "VELOCITY", "ACCELERATION", "SPCFORCES", "OLOAD",
+    "AEROF", "AEROFORCE",
     "STRESS", "ELFORCE", "FORCE", "SET", "SUBCASE", "SUBCOM",
     "SUBSEQ", "SYMMETRY", "REPCASE", "OUTPUT", "AXISYMMETRIC",
     "MODES", "SVECTOR", "THERMAL", "FLUX", "TRIM",
     NULL
 };
+
+/* AEROF seen in the case control being written (APRES then goes)      */
+static int seen_aerof = 0;
 
 /* commands that are MSC's and mean nothing to the 1970s solver. Each
  * is listed with what its absence costs, because "dropped" on its own
@@ -205,6 +209,7 @@ void msc_case_write(FILE *fp, msc_deck *d, int *spc_sel, int *method_sel,
 
     *spc_sel = 0;
     *method_sel = 0;
+    seen_aerof = 0;
 
     for (i = 0; i < d->ncase; i++) {
         /* the continuation lines of a SET (a trailing comma continues
@@ -219,6 +224,33 @@ void msc_case_write(FILE *fp, msc_deck *d, int *spc_sel, int *method_sel,
         }
         split_case(d->cases[i], name, opts, val);
         if (!name[0]) continue;
+
+        /* the aerodynamic pressures and forces on the boxes: MSC prints
+         * them on two requests (APRES, AEROF); NASTRAN-95 has one, AEROF,
+         * and its ADR module prints both together per flutter root of a
+         * marked loop (AERODYNAMIC LOADS, unit dynamic pressure). APRES
+         * becomes AEROF, or goes when AEROF is asked for already       */
+        if (msc_streq(name, "APRES") || msc_streq(name, "APRESSURE")) {
+            if (seen_aerof) {
+                msc_msg(MSC_INFO, 9104,
+                    "case control %s: NASTRAN-95's AEROF prints the aerodynamic\n"
+                    "pressures and forces together, and the deck asks for AEROF\n"
+                    "already; dropped.", name);
+                continue;
+            }
+            msc_msg(MSC_INFO, 9104,
+                "case control %s = %s became AEROF = %s: NASTRAN-95 prints the\n"
+                "aerodynamic pressures and forces on the boxes together (ADR,\n"
+                "AERODYNAMIC LOADS, per unit dynamic pressure) for the roots of\n"
+                "the flutter loops a negative FLFACT velocity marks.", name, val, val);
+            fprintf(fp, "AEROF = %s\n", val);
+            seen_aerof = 1;
+            continue;
+        }
+        if (msc_streq(name, "AEROF") || msc_streq(name, "AEROFORCE")) {
+            if (seen_aerof) continue;              /* an APRES wrote it already */
+            seen_aerof = 1;
+        }
 
         for (j = 0; case_drops[j].name; j++) {
             if (msc_streq(name, case_drops[j].name)) {

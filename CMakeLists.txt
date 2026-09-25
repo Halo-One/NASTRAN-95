@@ -384,6 +384,59 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   endif()
 endif()
 
+# The hot kernels a second time, for x86-64-v3 (Halo One, 2026): the PK
+# method's QR and products (mis/fa1pkq.f), its eigenvector solve
+# (mis/egnvct.f) and the doublet-lattice kernel for a batch of reduced
+# frequencies (mis/tkerv.f). The copies are made here from the same
+# source - each routine renamed ...V3 and its hand-over block (between
+# the HALO-ISA-BEGIN and HALO-ISA-END comments) left out - and compiled
+# with -march=x86-64-v3 (AVX2, FMA, BMI2: processors from 2013 on).
+# Both builds are -ffp-contract=off without -ffast-math, so the wider
+# vectors change the speed and not a bit; each kernel hands over to its
+# V3 build when msc/mscisa.c finds the processor has it (N95_ISA=0 keeps
+# the baseline). The executable still runs on any x86-64. Not x86-64:
+# the copies are built without -march and never called.
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/tkerv.f"
+      PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    set(_isa_flag "-march=x86-64-v3")
+  else()
+    set(_isa_flag "")
+  endif()
+  set(_isa_dir "${CMAKE_CURRENT_BINARY_DIR}/isa")
+  file(MAKE_DIRECTORY "${_isa_dir}")
+  foreach(_k fa1pkq egnvct tkerv)
+    set(_src "${CMAKE_CURRENT_SOURCE_DIR}/mis/${_k}.f")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_src}")
+    file(READ "${_src}" _text)
+    while(TRUE)
+      string(FIND "${_text}" "C     HALO-ISA-BEGIN" _b)
+      if(_b LESS 0)
+        break()
+      endif()
+      string(FIND "${_text}" "C     HALO-ISA-END" _e)
+      string(SUBSTRING "${_text}" 0 ${_b} _head)
+      string(SUBSTRING "${_text}" ${_e} -1 _tail)
+      string(FIND "${_tail}" "\n" _nl)
+      math(EXPR _nl "${_nl} + 1")
+      string(SUBSTRING "${_tail}" ${_nl} -1 _tail)
+      set(_text "${_head}${_tail}")
+    endwhile()
+    foreach(_n FA1PKQ HSBGQ ATEIGQ FA1PKG EGNVCT TKERV)
+      string(REGEX REPLACE "([^A-Z0-9])${_n}([ (])" "\\1${_n}V3\\2"
+             _text "${_text}")
+    endforeach()
+    file(WRITE "${_isa_dir}/${_k}_v3.f" "${_text}")
+    target_sources(nas PRIVATE "${_isa_dir}/${_k}_v3.f")
+  endforeach()
+  set_source_files_properties("${_isa_dir}/fa1pkq_v3.f"
+      "${_isa_dir}/egnvct_v3.f" PROPERTIES COMPILE_OPTIONS
+      "-O3;-funroll-loops;-fautomatic;-ffp-contract=off;${_isa_flag}")
+  set_source_files_properties("${_isa_dir}/tkerv_v3.f" PROPERTIES
+      COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off;${_isa_flag}")
+endif()
+
 # bd/semdbd.f is NOT excluded, although the upstream CMake build excludes it.
 # It is the only BLOCK DATA in the tree that initialises /XMSSG/ (the "0***
 # USER FATAL MESSAGE" prefixes), /SEM/, /SYSTEM/, /XFIAT/ and /OSCENT/, and

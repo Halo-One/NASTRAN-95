@@ -229,6 +229,35 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   endforeach()
   set_source_files_properties(${DLM_KERNEL_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
 endif()
+# The PK method's own arithmetic (Halo One, 2026): mis/fa1pkq.f holds
+# FA1PKA + HSBG + ATEIG and the GMMATS product FA1PKE asks for, rewritten
+# without the argument aliasing the originals rely on (one array passed as
+# both a REAL input and a DOUBLE PRECISION work area), and mis/egnvct.f is
+# the complex eigenvector solve FA1PKT and FA1PKV call for every root. On
+# a 120-mode basis the PK loop is nine tenths a 240-square QR per root per
+# iteration, and these are where it goes. -fautomatic because they are
+# also called from threads (mis/fa1pkp.f), -ffp-contract=off so that no
+# toolchain that defaults to FMA can move a bit: they give the -O0 answer
+# exactly, which is how they are checked.
+# mis/fa1pkp.f (Halo One, 2026) solves the flutter loops of one Mach side
+# by side, a thread per loop, with FA1PKE's arithmetic transcribed onto
+# arrays of its own, and hands FA1PKE each loop to write in order; it is
+# compiled the same way and threaded with OpenMP when the toolchain has it.
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  set_source_files_properties(
+      "${CMAKE_CURRENT_SOURCE_DIR}/mis/fa1pkq.f"
+      "${CMAKE_CURRENT_SOURCE_DIR}/mis/egnvct.f"
+      PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off")
+  find_package(OpenMP COMPONENTS Fortran)
+  if(OpenMP_Fortran_FOUND)
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/fa1pkp.f"
+        PROPERTIES COMPILE_OPTIONS
+        "-O2;-fautomatic;-ffp-contract=off;${OpenMP_Fortran_FLAGS}")
+  else()
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/fa1pkp.f"
+        PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off")
+  endif()
+endif()
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   find_package(OpenMP COMPONENTS Fortran)
   if(OpenMP_Fortran_FOUND)

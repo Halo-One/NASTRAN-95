@@ -916,8 +916,10 @@ whole against `halo-ase-sol145` 8cd363e.
   SADD's two multiply-adds and MMA214's and MMA104's sums in their order; the serial
   path skips terms with an unstored (zero) factor and this keeps them, and a zero of
   either sign added to a sum that started at +0 changes nothing. Up to 16 pairs in
-  core (`N95_AMP_SLOTS`, `N95_AMP_MB`), each solve on one thread: OpenBLAS's ZGETRF
-  gives the same bits on 1 thread as on 32. `N95_AMP_PIPE=0` keeps AMP's loop.
+  core (`N95_AMP_SLOTS`, `N95_AMP_MB`; the SOL 145 driver gives each child half the
+  memory available shared among the children, between 512 MB and 2 GB), each solve
+  on one thread: OpenBLAS's ZGETRF gives the same bits on 1 thread as on 32.
+  `N95_AMP_PIPE=0` keeps AMP's loop.
 * **AMG's pairs in batches** (`mis/amgk.f`, `mis/tkerv.f`). Per (Mach, k) pair AMG
   re-read the group's record, re-wrote the same SKJ and recomputed every element; of
   that only the kernels and what is linear in them depend on k. For one

@@ -1020,11 +1020,34 @@ The direct flutter run is unchanged by the merge line for line (the flutter runs
 go without the in-memory database; 73.5 s), and the restart flow - the modes once
 with `scr=no`, the flutter deck off them - takes 72 s. The two agree to six
 significant figures, as on Windows, and the speed-ups reproduce each exactly (the
-Mach 0.40 child, every threaded path off against on, restarted and not). But the
-marginal PK roots at the slowest points land differently between the two, and on
-the monarch deck that moves the lowest crossing at Mach 0.30 and 0.40 (4.8 and 7.9
-m/s at 9.8 Hz off the restart, 20.1 and 19.8 m/s at 10.8 Hz direct): a root hovering
-about g = 0.005, the crossing threshold, at the lowest densities.
+Mach 0.40 child, every threaded path off against on, restarted and not). Those
+last digits move which matched points' PK solutions land elsewhere - a root at g
+-0.016 reading +0.010 at one point and -0.017 at the next - and on the monarch
+deck two such points gave the restart flow low "crossings" at Mach 0.30 and 0.40
+(4.8 and 7.9 m/s at 9.8 Hz; 20.1 and 19.8 m/s at 10.8 Hz direct). They are single
+points, not roots hovering about the threshold; the plotters now require two
+points above it (VehicleDesign's `drop_isolated`, Jon's `cross_points`), and with
+that the two flows give the same lowest crossings.
+
+### halo-ase-sol145's PKVECT and the loads velocity, on Linux
+
+Merged from `halo-ase-sol145` 63e15d6 (and 08a3c3e). The loads velocity is C in the
+shared part of the driver's child start and needed nothing. `PARAM PKVECT 1` met
+this branch's split of FA1PKV: here FA1PKV computes the vector and FA1PKW writes it,
+so the parallel PK solve can compute it in a thread and write it later in order.
+FA1PKW takes Jon's ISAVE and does what his FA1PKV does with it - the recovery
+scratch for a marked loop only, the print for every loop, `LOOP =` and `VELOCITY =`
+in the header. The parallel solve follows FA1PKE's PRTV: FA1PKL keeps the vectors
+of a loop that is marked or when PKVECT is set, and records which it was, and FA1PKR
+passes that to FA1PKW. On the 110-mode monarch deck (EAS 1..40, PKVECT 1, 70,239
+vector headers, 968 MB of print) this branch with `N95_AJJ_SOLVE=builtin` prints a
+Linux build of 63e15d6 with only the POSIX port line for line (10,070,894 lines;
+the raw files differ in 29 bytes, all of them clock lines), in 206 s against 768 s;
+with OpenBLAS it runs in 43 s and differs from it in 48 of 22,447 summary rows and
+in the last digits of eigenvector components, with every crossing the same. NASA's
+132 demos print as 63e15d6's but for d01002a, d07021a and d07022a (the complex
+decomposition count, which also differs between two builds of Jon's own source)
+and the two AERO 11 gust decks (the in-core gust solve, as before).
 
 ### What is still serial
 

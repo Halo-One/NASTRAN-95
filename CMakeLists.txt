@@ -326,6 +326,23 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
         PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off")
   endif()
 endif()
+# mis/amgk.f (Halo One, 2026) is AMG's pair loop for one doublet-lattice
+# group, the pairs of each Mach in batches: every element computed once
+# for all the batch's reduced frequencies, each frequency's arithmetic the
+# original's (DPPS, SUBP, INCRO, TKER, IDF1, IDF2 as lane loops). The
+# loops that call SIN and COS carry !GCC$ NOVECTOR: gfortran on glibc
+# pre-includes math-vector-fortran.h and would call libmvec's vector sinf
+# and cosf, which round differently from the scalar ones.
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  if(OpenMP_Fortran_FOUND)
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/amgk.f"
+        PROPERTIES COMPILE_OPTIONS
+        "-O2;-fautomatic;-ffp-contract=off;${OpenMP_Fortran_FLAGS}")
+  else()
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/amgk.f"
+        PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off")
+  endif()
+endif()
 # The solve inside mis/ampcz.f is mis/ampczs/ampczs_lapack.f - LAPACK's
 # ZGETRF + ZGETRS - when NASTRAN_LAPACK_LIBRARIES names a LAPACK to link,
 # and mis/ampczs/ampczs_builtin.f (the threaded, unblocked LU the in-core

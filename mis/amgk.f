@@ -1,0 +1,1034 @@
+      SUBROUTINE AMGK (AERO,ACPT,AJJL,SKJ,NTPS,IDONE,IERR)
+C
+C     HALO: AMG'S LOOP ON (MACH, K) PAIRS FOR ONE DOUBLET LATTICE GROUP,
+C     THE PAIRS OF ONE MACH IN BATCHES.
+C
+C     AMG BUILDS AJJ PAIR BY PAIR: FOR EACH IT READS THE GROUP'S RECORD
+C     OFF ACPT, WRITES THE SAME SKJ COLUMNS (DLAMG) AND COMPUTES EVERY
+C     (RECEIVING BOX, SENDING BOX) ELEMENT FROM SCRATCH (GEND, DPPS,
+C     SUBP): THE STEADY PART (SNPDF), THREE KERNEL EVALUATIONS (INCRO,
+C     TKER) AND THEIR INTEGRALS (IDF1, IDF2). ONLY THE REDUCED FREQUENCY
+C     CHANGES FROM PAIR TO PAIR, AND OF ALL THAT ONLY THE KERNELS AND
+C     THE TERMS LINEAR IN THEM DEPEND ON IT - THE STEADY PART, THE
+C     GEOMETRY, TKER'S BRANCHES, ITS SQUARE ROOTS AND EXPONENTIAL, THE
+C     LOGARITHM AND ARCTANGENT IN IDF1 AND IDF2 DO NOT.
+C
+C     HERE UP TO NBMAX PAIRS OF THE SAME MACH ARE DONE TOGETHER: THE
+C     RECORD READ ONCE, EACH PAIR'S SKJ COLUMNS WRITTEN AS DLAMG WRITES
+C     THEM, THEN EVERY ELEMENT COMPUTED ONCE FOR ALL THE BATCH'S
+C     FREQUENCIES (DLAMGK, GENDK, DPPSK, SUBPK, INCROK, TKERV, IDF1V,
+C     IDF2V - THE ROUTINES THEY STAND FOR, WITH EACH FREQUENCY-DEPENDENT
+C     STATEMENT A LOOP OVER THE BATCH), THE ROWS SIDE BY SIDE ON OPENMP
+C     THREADS AS GENDP DOES THEM, AND EACH PAIR'S ROWS PACKED IN TURN.
+C     EVERY FREQUENCY'S ARITHMETIC IS THE ORIGINAL'S, THE SAME
+C     EXPRESSIONS IN THE SAME ORDER, SO AJJL IS THE SAME TO THE BIT; THE
+C     SINES, COSINES AND EXPONENTIAL ARE THE SAME SCALAR LIBRARY CALLS
+C     (THE LOOPS THAT MAKE THEM ARE KEPT SCALAR - GFORTRAN WOULD
+C     OTHERWISE CALL GLIBC'S VECTOR SINF AND COSF, WHICH ROUND
+C     DIFFERENTLY).
+C
+C     TAKEN WHEN ACPT HOLDS ONE RECORD AND IT IS DOUBLET LATTICE (AMG'S
+C     OWN COUNT, IZ(1) AND IZ(2)) AND THE ROWS ARE THREADED (NOT
+C     N95_DLM_THREADS=1). N95_AMG_BATCH=N SETS THE BATCH (DEFAULT 8,
+C     AT MOST 16; A BATCH HOLDS N AJJ, 8 NJ**2 BYTES EACH); 0 KEEPS
+C     AMG'S OWN LOOP.
+C
+C     NTPS   THE GROUP'S BOXES (AMG'S IZ(3), OPEN CORE - COPIED AT ONCE:
+C            DLAMGK READS THE ACPT RECORD OVER IT)
+C     IDONE  1 WHEN THE PAIRS WERE DONE HERE, 0 WHEN AMG IS TO DO THEM
+C     IERR   1 OR 2: AMG'S ERRORS 400 AND 420 (MORE SKJ COLUMNS OR AJJ
+C            ROWS THAN ASKED FOR)
+C
+      INTEGER          AERO,ACPT,AJJL,SKJ,NTPS,IDONE,IERR,NBMAX,NPR,
+     1                 IP,NB,IOS,IST,METHOD,N,NTHR,J,NTP0
+      REAL,            ALLOCATABLE :: PR(:,:),PRN(:,:)
+      COMPLEX,         ALLOCATABLE :: DTB(:,:,:)
+      REAL             RFKV(16),FM
+      CHARACTER*16     ENVT
+      INTEGER          NAME(2)
+      COMMON /AMGMN /  MCB(7),NROW,ND,NE,REFC,FMACH,RFK,TSKJ(7),ISK,NSK
+      DATA    NAME  /  4HAMGK,4H     /
+C
+      IDONE = 0
+      IERR  = 0
+      NTP0  = NTPS
+      NBMAX = 8
+      ENVT  = ' '
+      CALL GETENV ('N95_AMG_BATCH',ENVT)
+      IF (ENVT .NE. ' ') READ (ENVT,*,IOSTAT=IOS) NBMAX
+      IF (NBMAX .LE. 0) RETURN
+      NBMAX = MIN(NBMAX,16)
+      NTHR  = 0
+      ENVT  = ' '
+      CALL GETENV ('N95_DLM_THREADS',ENVT)
+      IF (ENVT .NE. ' ') READ (ENVT,*,IOSTAT=IOS) NTHR
+      IF (NTHR .EQ. 1) RETURN
+      IF (NTP0 .LE. 0) RETURN
+      ALLOCATE (DTB(NTP0,NTP0,NBMAX),STAT=IST)
+      IF (IST .NE. 0) RETURN
+C
+C     THE PAIRS: THE REST OF AERO'S RECORD, TWO WORDS EACH (AMG, 100)
+C
+      ALLOCATE (PR(2,64))
+      NPR = 0
+   10 IF (NPR .LT. SIZE(PR,2)) GO TO 15
+      ALLOCATE (PRN(2,2*SIZE(PR,2)))
+      PRN(:,1:NPR) = PR(:,1:NPR)
+      CALL MOVE_ALLOC (PRN,PR)
+   15 CALL READ (*20,*20,AERO,PR(1,NPR+1),2,0,N)
+      NPR = NPR + 1
+      GO TO 10
+   20 IDONE = 1
+C
+C     BATCHES OF CONSECUTIVE PAIRS AT ONE MACH, EACH AS AMG DOES ONE
+C     PAIR: ACPT'S HEADER SKIPPED, THE METHOD WORD READ, THE RECORD
+C     USED, ACPT REWOUND
+C
+      IP = 1
+   30 IF (IP .GT. NPR) GO TO 90
+      FM = PR(1,IP)
+      NB = 1
+   35 IF (IP+NB .GT. NPR) GO TO 40
+      IF (NB.GE.NBMAX .OR. PR(1,IP+NB).NE.FM) GO TO 40
+      NB = NB + 1
+      GO TO 35
+   40 DO 45 J = 1,NB
+      RFKV(J) = PR(2,IP+J-1)
+   45 CONTINUE
+      FMACH = FM
+      CALL FWDREC (*80,ACPT)
+      CALL READ (*80,*80,ACPT,METHOD,1,0,N)
+      CALL DLAMGK (ACPT,AJJL,SKJ,NB,RFKV,DTB,NTP0,IERR)
+      IF (IERR .NE. 0) RETURN
+      CALL REWIND (ACPT)
+      IP = IP + NB
+      GO TO 30
+   80 CALL MESAGE (-2,ACPT,NAME)
+   90 RETURN
+      END
+
+      SUBROUTINE DLAMGK (INPUT,MATOUT,SKJ,NB,RFKV,DTB,NTPS,IERR)
+C
+C     HALO: DLAMG FOR A BATCH OF NB PAIRS OF ONE MACH (AMGK): THE
+C     RECORD READ AND THE POINTERS SET AS DLAMG SETS THEM, EACH PAIR'S
+C     SKJ COLUMNS (DLAMKS), THE ELEMENTS OF ALL THE PAIRS (GENDK), THEN
+C     EACH PAIR'S ROWS PACKED TO AJJL AS GEND PACKS THEM.
+C
+      INTEGER         ECORE,SYSBUF,SKJ,NB,NTPS,IERR,P,NREAD,N,I,J
+      REAL            RFKV(NB)
+      COMPLEX         DTB(NTPS,NTPS,NB)
+      COMPLEX,        ALLOCATABLE :: DT(:)
+      COMMON /PACKX / ITI,ITO,II,NN,INCR
+      COMMON /AMGMN / MCB(7),NROW,ND,NE,REFC,FMACH,RFK,TSKJ(7),ISK,NSK
+      COMMON /DLCOM / NP,NSTRIP,NTP,F,NJJ,NEXT,LENGTH,
+     1                INC,INB,IYS,IZS,IEE,ISG,ICG,
+     2                IXIC,IDELX,IXLAM,IDT,ECORE
+      COMMON /ZZZZZZ/ WORK(1)
+      COMMON /SYSTEM/ SYSBUF
+      COMMON /BLANK / NK,NJ
+      DIMENSION       NAME(2)
+      DATA    NAME  / 4HDLAM,4HGK  /
+C
+      NJJ = NJ
+      CALL READ (*999,*999,INPUT,NP,4,0,N)
+      ECORE = KORSZ(WORK)
+      ECORE = ECORE - 4*SYSBUF
+      INC   = 1
+      INB   = INC + NP
+      IYS   = INB + NP
+      IZS   = IYS + NSTRIP
+      IEE   = IZS + NSTRIP
+      ISG   = IEE + NSTRIP
+      ICG   = ISG + NSTRIP
+      IXIC  = ICG + NSTRIP
+      IDELX = IXIC + NTP
+      IXLAM = IDELX + NTP
+      NREAD = IXLAM + NTP
+      IDT   = (NREAD+2)/2
+      NEXT  = IDT*2 + 2*NJ + 1
+      IF (NEXT .GT. ECORE) GO TO 998
+      IF (NTP  .NE. NTPS ) GO TO 999
+      NREAD = NREAD - 1
+      CALL READ (*999,*999,INPUT,WORK,NREAD,1,N)
+      LENGTH = 1
+C
+C     EACH PAIR'S SKJ COLUMNS, WITH AMG'S PER-PAIR COUNTERS
+C
+      DO 10 P = 1,NB
+      RFK  = RFKV(P)
+      NROW = 0
+      ISK  = 1
+      NSK  = 0
+      CALL DLAMKS (WORK(INC),WORK(INB),WORK(IEE),WORK(IDELX),SKJ)
+      IF (NSK .GT. NK) GO TO 910
+   10 CONTINUE
+C
+C     THE ELEMENTS, ALL PAIRS AT ONCE
+C
+      CALL GENDK (WORK(INC),WORK(INB),WORK(IYS),WORK(IZS),WORK(ISG),
+     1            WORK(ICG),WORK,NB,FMACH,RFKV,DTB,NTPS)
+C
+C     EACH PAIR'S ROWS, AS GEND PACKS THEM (DT ZEROED TO NJJ, THE ROW
+C     AT DT(1+NROW..))
+C
+      ALLOCATE (DT(MAX(NJJ,NTP)))
+      DO 30 P = 1,NB
+      RFK  = RFKV(P)
+      NROW = 0
+      ITI  = 3
+      ITO  = 3
+      II   = 1
+      NN   = NJ
+      DO 25 I = 1,NTP
+      DO 20 J = 1,NJJ
+   20 DT(J) = (0.0,0.0)
+      DO 22 J = 1,NTP
+   22 DT(NROW+J) = DTB(J,I,P)
+      CALL PACK (DT,MATOUT,MCB)
+   25 CONTINUE
+      NROW = NROW + NTP
+      IF (NROW .GT. NJ) GO TO 920
+   30 CONTINUE
+      DEALLOCATE (DT)
+      RETURN
+C
+  910 IERR = 1
+      RETURN
+  920 IERR = 2
+      RETURN
+  998 CALL MESAGE (-8,0,NAME)
+  999 CALL MESAGE (-7,0,NAME)
+      RETURN
+      END
+
+      SUBROUTINE DLAMKS (NCARAY,NBARAY,EE,DELX,SKJ)
+C
+C     HALO: DLAMG'S "PUT OUT SKJ", ONE PAIR'S COLUMNS
+C
+      INTEGER         NCARAY(1),NBARAY(1),SKJ,ECORE
+      REAL            EE(1),DELX(1),A(2)
+      COMMON /PACKX / ITI,ITO,II,NN,INCR
+      COMMON /AMGMN / MCB(7),NROW,ND,NE,REFC,FMACH,RFK,TSKJ(7),ISK,NSK
+      COMMON /DLCOM / NP,NSTRIP,NTP,F,NJJ,NEXT,LENGTH,
+     1                INC,INB,IYS,IZS,IEE,ISG,ICG,
+     2                IXIC,IDELX,IXLAM,IDT,ECORE
+      ITI  = 1
+      ITO  = 3
+      II   = ISK
+      NSK  = NSK + 2
+      NN   = NSK
+      K    = 0
+      KS   = 0
+      NBXR = NCARAY(1+K)
+      DO 5 I = 1,NTP
+      A(1) = 2.0 * EE(1+KS) * DELX(I)
+      A(2) = (EE(1+KS) * DELX(I)**2)/ 2.0
+      CALL PACK (A,SKJ,TSKJ)
+      II   = II + 2
+      IF (I .EQ. NTP) GO TO 5
+      NN   = NN + 2
+      IF (I .EQ. NBARAY(1+K)) K = K + 1
+      IF (I .EQ. NBXR) GO TO 4
+      GO TO 5
+    4 KS   = KS + 1
+      NBXR = NBXR + NCARAY(1+K)
+    5 CONTINUE
+      ISK  = II
+      NSK  = NN
+      RETURN
+      END
+
+      SUBROUTINE GENDK (NCARAY,NBARAY,YS,ZS,SG,CG,WORK,NB,FMACH,RFKV,
+     1                  DTB,NTPS)
+C
+C     HALO: GENDP FOR A BATCH (AMGK): THE ROWS SIDE BY SIDE, EACH ROW
+C     FOR ALL NB FREQUENCIES AT ONCE (DPPSK), INTO DTB(J,I,P)
+C
+      INTEGER         NCARAY(1),NBARAY(1),NB,NTPS,I,J,K,KS,NBXR,NTHR,
+     1                IOS,P,ECORE
+      REAL            YS(1),ZS(1),SG(1),CG(1),WORK(1),FMACH,RFKV(NB)
+      COMPLEX         DTB(NTPS,NTPS,NB)
+      INTEGER,        ALLOCATABLE :: KSV(:)
+      COMPLEX,        ALLOCATABLE :: DTR(:,:)
+      CHARACTER*16    ENVT
+      COMMON /DLCOM / NP,NSTRIP,NTP,F,NJJ,NEXT,LENGTH,
+     1                INC,INB,IYS,IZS,IEE,ISG,ICG,
+     2                IXIC,IDELX,IXLAM,IDT,ECORE
+!$    INTEGER         OMP_GET_MAX_THREADS
+C
+      NTHR  = 0
+      ENVT  = ' '
+      CALL GETENV ('N95_DLM_THREADS',ENVT)
+      IF (ENVT .NE. ' ') READ (ENVT,*,IOSTAT=IOS) NTHR
+      IF (ENVT .NE. ' ' .AND. IOS .NE. 0) NTHR = 0
+!$    IF (NTHR .LE. 0) NTHR = OMP_GET_MAX_THREADS()
+      IF (NTHR .LE. 0) NTHR = 1
+      ALLOCATE (KSV(NTP))
+      K    = 1
+      KS   = 1
+      NBXR = NCARAY(K)
+      DO 20 I = 1,NTP
+      KSV(I) = KS
+      IF (I .EQ. NTP) GO TO 20
+      IF (I .EQ. NBARAY(K)) K = K + 1
+      IF (I .NE. NBXR) GO TO 20
+      KS   = KS + 1
+      NBXR = NBXR + NCARAY(K)
+   20 CONTINUE
+!$OMP PARALLEL NUM_THREADS(NTHR) DEFAULT(SHARED) PRIVATE(I,J,P,DTR)
+      ALLOCATE (DTR(16,NTP))
+!$OMP DO SCHEDULE(DYNAMIC,1)
+      DO 40 I = 1,NTP
+      CALL DPPSK (KSV(I),I,1,NTP,SG(KSV(I)),CG(KSV(I)),YS,ZS,NBARAY,
+     1            NCARAY,WORK,NB,FMACH,RFKV,DTR)
+      DO 35 P = 1,NB
+      DO 35 J = 1,NTP
+      DTB(J,I,P) = DTR(P,J)
+   35 CONTINUE
+   40 CONTINUE
+!$OMP END DO
+      DEALLOCATE (DTR)
+!$OMP END PARALLEL
+      DEALLOCATE (KSV)
+      RETURN
+      END
+
+      SUBROUTINE DPPSK (KS,I,J1,J2,SGR,CGR,YS,ZS,NBARAY,NCARAY,WORK,
+     1                  NB,FMACH,KRV,DTR)
+C
+C     HALO: DPPS FOR NB FREQUENCIES: ONE ROW, DTR(P,J) FOR PAIR P
+C
+      INTEGER         NB,ECORE
+      DIMENSION       YS(1),ZS(1),NBARAY(1),NCARAY(1),WORK(1)
+      REAL            KRV(NB),FMACH
+      COMPLEX         DTR(16,*),SUMV(16)
+      COMMON /DLCOM / NP,NSTRIP,NTP,F,NJJ,NEXT,LENGTH,
+     1                INC,INB,IYS,IZS,IEE,ISG,ICG,
+     2                IXIC,IDELX,IXLAM,IDT,ECORE
+      L     = 1
+      LS    = 1
+      NBXS  = NBARAY(L)
+      NC1   = NCARAY(L)
+      NBCUM = NC1
+      YREC  = YS(KS)
+      ZREC  = ZS(KS)
+      DO 20 J = J1,J2
+      CALL SUBPK (I,L,LS,J,SGR,CGR,YREC,ZREC,NB,KRV,FMACH,SUMV,
+     1            WORK(IXIC),WORK(IDELX),WORK(IEE),WORK(IXLAM),
+     2            WORK(ISG),WORK(ICG),YS,ZS)
+      DO 5 IP = 1,NB
+    5 DTR(IP,J) = SUMV(IP)
+      IF (J .EQ. J2) GO TO 20
+      IF (J .LT. NBXS) GO TO 10
+      L     = L + 1
+      NC1   = NCARAY(L)
+      NBXS  = NBARAY(L)
+   10 CONTINUE
+      IF (J .LT. NBCUM) GO TO 20
+      LS    = LS + 1
+      NBCUM = NBCUM + NC1
+   20 CONTINUE
+      RETURN
+      END
+
+      SUBROUTINE SUBPK (I,L,LS,J,SGR,CGR,YREC,ZREC,NB,KRV,FMACH,SUMV,
+     1                  XIC,DELX,EE,XLAM,SG,CG,YS,ZS)
+C
+C     HALO: SUBP FOR NB FREQUENCIES KRV (ONE MACH): THE STEADY PART
+C     (SNPDF) ONCE PER SENDING POINT, THE INCREMENT (INCROK) FOR ALL
+C     THE FREQUENCIES, AND SUBP'S SUM FOR EACH. A FREQUENCY .LE. EPS
+C     HAS NO INCREMENT, AS IN SUBP.
+C
+      INTEGER        NB,P
+      REAL           KRV(NB),FMACH,M
+      COMPLEX        DPUR(16),DPUL(16),DPLR(16),DPLL(16),DP,SUMV(NB)
+      REAL           DELR(16),DELI(16),DRV(16),DIV(16)
+      LOGICAL        ANYK
+      DIMENSION      XIC(1),DELX(1),EE(1),XLAM(1),SG(1),CG(1),YS(1),
+     1               ZS(1)
+      COMMON /AMGMN/ MCB(7),NROW,ND,NE,REFC,FMACHC,KRC
+      COMMON /DLCOM/ DUM(3),F
+      EPS  = 0.00001
+      M    = FMACH
+      BETA = SQRT(1.0-M*M)
+      FL   = REFC
+      FLND = FLOAT(ND)
+      FLNE = FLOAT(NE)
+      SGS  = SG(LS)
+      CGS  = CG(LS)
+      ANYK = .FALSE.
+      DO 5 P = 1,NB
+      DPUR(P) = (0.0,0.0)
+      DPUL(P) = (0.0,0.0)
+      DPLR(P) = (0.0,0.0)
+      DPLL(P) = (0.0,0.0)
+      DELR(P) = 0.0
+      DELI(P) = 0.0
+      IF (KRV(P) .GT. EPS) ANYK = .TRUE.
+    5 CONTINUE
+      DIJ  = 0.0
+      DIJI = 0.0
+      DELRI= 0.0
+      DELII= 0.0
+C     UPPER RIGHT SENDING POINT
+      IGO  = 1
+      TL   = XLAM(J)
+      SQTL = SQRT(1.0+TL**2)
+      SL   = TL/SQTL
+      CL   = 1.0/SQTL
+      X    = XIC(I) + F*DELX(I)
+      X0   = X - XIC(J)
+      Y0   = YREC - YS(LS)
+      Z0   = ZREC - ZS(LS)
+      ES   = EE(LS)
+      DXS  = DELX(J)
+      AX   = X0
+      AY   = Y0
+      AZ   = Z0
+      CV   = DXS
+   30 CALL SNPDF (SL,CL,TL,SGS,CGS,SGR,CGR,X0,Y0,Z0,ES,DIJ,BETA,CV)
+      IF (.NOT.ANYK) GO TO 40
+      SDELX= DXS
+      DELY = 2.0*ES
+      AX1  = AX + ES*TL
+      AY1  = AY + ES*CGS
+      AZ1  = AZ + ES*SGS
+      AX2  = AX - ES*TL
+      AY2  = AY - ES*CGS
+      AZ2  = AZ - ES*SGS
+      CALL INCROK (AX,AY,AZ,AX1,AY1,AZ1,AX2,AY2,AZ2,SGR,CGR,SGS,CGS,
+     1             NB,KRV,FL,BETA,SDELX,DELY,DRV,DIV)
+      DO 35 P = 1,NB
+      IF (KRV(P) .LE. EPS) GO TO 35
+      DELR(P) = DRV(P)
+      DELI(P) = DIV(P)
+   35 CONTINUE
+   40 CONTINUE
+      GO TO (140,150,170,180), IGO
+  140 DO 145 P = 1,NB
+      DPUR(P) = CMPLX(((DIJ+DIJI)-(DELR(P)+DELRI)),(-DELI(P)-DELII))
+  145 CONTINUE
+      IF (ND .EQ. 0) GO TO 160
+C     UPPER LEFT  SENDING POINT
+      IGO  = 2
+      SGS  =-SGS
+      TL   =-TL
+      SL   =-SL
+      Y0   = YREC + YS(LS)
+      AY   = Y0
+      GO TO  30
+  150 DO 155 P = 1,NB
+      DPUL(P) = CMPLX(((DIJ+DIJI)-(DELR(P)+DELRI)),(-DELI(P)-DELII))
+  155 CONTINUE
+  160 CONTINUE
+      IF (NE .EQ. 0) GO TO 190
+C     LOWER RIGHT SENDING POINT
+      IGO  = 3
+      TL   = XLAM(J)
+      SL   = TL/(SQRT(1.0+TL*TL))
+      Y0   = YREC - YS(LS)
+      Z0   = ZREC + ZS(LS)
+      AY   = Y0
+      AZ   = Z0
+      SGS  =-SG(LS)
+      GO TO  30
+  170 DO 175 P = 1,NB
+      DPLR(P) = CMPLX(((DIJ+DIJI)-(DELR(P)+DELRI)),(-DELI(P)-DELII))
+  175 CONTINUE
+      IF (ND .EQ. 0) GO TO 190
+C     LOWER LEFT  SENDING POINT
+      IGO  = 4
+      SGS  = SG(LS)
+      TL   =-XLAM(J)
+      SL   = TL/(SQRT(1.0+TL*TL))
+      Y0   = YREC + YS(LS)
+      AY   = Y0
+      GO TO  30
+  180 DO 185 P = 1,NB
+      DPLL(P) = CMPLX(((DIJ+DIJI)-(DELR(P)+DELRI)),(-DELI(P)-DELII))
+  185 CONTINUE
+  190 CONTINUE
+      DO 195 P = 1,NB
+      DP = DPUR(P) + FLND*DPUL(P) + FLNE*DPLR(P) + FLND*FLNE*DPLL(P)
+      SUMV(P) = DP
+  195 CONTINUE
+      RETURN
+      END
+
+      SUBROUTINE INCROK (AX,AY,AZ,AX1,AY1,AZ1,AX2,AY2,AZ2,SGR,CGR,SGS,
+     1                   CGS,NB,KRV,FL,BETA,SDELX,DELY,DELR,DELI)
+C
+C     HALO: INCRO FOR NB FREQUENCIES: THE THREE KERNEL EVALUATIONS
+C     (TKERV, CENTRE, INBOARD, OUTBOARD, IN INCRO'S ORDER, T1 AND T2
+C     CARRIED FROM ONE TO THE NEXT AS INCRO CARRIES THEM), THE
+C     PARABOLA'S COEFFICIENTS PER FREQUENCY, AND IDF1 / IDF2 FOR ALL
+C     FREQUENCIES (IDF1V, IDF2V)
+C
+      INTEGER      NB,P
+      REAL         KRV(NB),DELR(NB),DELI(NB),M,K10T1,K20T2P
+      REAL         K1RT1(16),K1IT1(16),K2RT2P(16),K2IT2P(16),
+     1             DKRC(16),DKIC(16),XKRC(16),XKIC(16),DKRI(16),
+     2             DKII(16),XKRI(16),XKII(16),DKRO(16),DKIO(16),
+     3             XKRO(16),XKIO(16),ARE(16),AIM(16),BRE(16),BIM(16),
+     4             CRE(16),CIM(16),A2R(16),A2I(16),B2R(16),B2I(16),
+     5             C2R(16),C2I(16),XIIJR(16),XIIJI(16),DIIJR(16),
+     6             DIIJI(16)
+      M     = SQRT(1.0 - BETA**2)
+      BR    = FL/2.
+      EPS   = 0.00001
+      PI    = 3.14159265
+      XDELX = SDELX
+      XDELY = DELY
+      EE    = 0.5*XDELY
+      E2    = EE**2
+      DO 5 P = 1,NB
+      DELR(P) = 0.0
+      DELI(P) = 0.0
+    5 CONTINUE
+      AT1S  = 0.0
+      AT2S  = 0.0
+      T1    = 0.0
+      T2    = 0.0
+C     CENTRE (INCRO'S COUNT = 0, LABEL 90)
+      CALL TKERV (AX,AY,AZ,NB,KRV,BR,SGR,CGR,SGS,CGS,T1,T2,M,
+     1            K1RT1,K1IT1,K2RT2P,K2IT2P,K10T1,K20T2P)
+      AT1   = ABS(T1)
+      AT2   = ABS(T2)
+      IF (AT1 .GT. AT1S) AT1S = AT1
+      IF (AT2 .GT. AT2S) AT2S = AT2
+      DO 90 P = 1,NB
+      DKRC(P) = K1RT1(P) - K10T1
+      DKIC(P) = K1IT1(P)
+      XKRC(P) = K2RT2P(P) - K20T2P
+      XKIC(P) = K2IT2P(P)
+   90 CONTINUE
+C     INBOARD (COUNT = -1, LABEL 130)
+      CALL TKERV (AX1,AY1,AZ1,NB,KRV,BR,SGR,CGR,SGS,CGS,T1,T2,M,
+     1            K1RT1,K1IT1,K2RT2P,K2IT2P,K10T1,K20T2P)
+      AT1   = ABS(T1)
+      AT2   = ABS(T2)
+      IF (AT1 .GT. AT1S) AT1S = AT1
+      IF (AT2 .GT. AT2S) AT2S = AT2
+      DO 130 P = 1,NB
+      DKRI(P) = K1RT1(P) - K10T1
+      DKII(P) = K1IT1(P)
+      XKRI(P) = K2RT2P(P) - K20T2P
+      XKII(P) = K2IT2P(P)
+  130 CONTINUE
+C     OUTBOARD (COUNT = 1, LABEL 150)
+      CALL TKERV (AX2,AY2,AZ2,NB,KRV,BR,SGR,CGR,SGS,CGS,T1,T2,M,
+     1            K1RT1,K1IT1,K2RT2P,K2IT2P,K10T1,K20T2P)
+      AT1   = ABS(T1)
+      AT2   = ABS(T2)
+      IF (AT1 .GT. AT1S) AT1S = AT1
+      IF (AT2 .GT. AT2S) AT2S = AT2
+      DO 150 P = 1,NB
+      DKRO(P) = K1RT1(P) - K10T1
+      DKIO(P) = K1IT1(P)
+      XKRO(P) = K2RT2P(P) - K20T2P
+      XKIO(P) = K2IT2P(P)
+  150 CONTINUE
+      X0    = AX
+      Y0    = AY
+      Z0    = AZ
+      ZERO  = 0.0
+      XMULT = XDELX/(8.0*PI)
+      IF (Y0.EQ.ZERO .AND.  Z0.EQ.ZERO) GO TO 220
+      IF (Z0.EQ.ZERO .AND. SGS.EQ.ZERO) GO TO 230
+      ETA01 = Y0*CGS + Z0*SGS
+      ZET01 =-Y0*SGS + Z0*CGS
+      AZET0 = ABS(ZET01)
+      IF (AZET0 .LE. 0.0001) ZET01 = 0.
+      R1SQX = ETA01**2 + ZET01**2
+  210 DO 215 P = 1,NB
+      ARE(P) = (DKRI(P) - 2.*DKRC(P) + DKRO(P))/(2.0*E2)
+      AIM(P) = (DKII(P) - 2.*DKIC(P) + DKIO(P))/(2.0*E2)
+      BRE(P) = (DKRO(P) - DKRI(P))/(2.0*EE)
+      BIM(P) = (DKIO(P) - DKII(P))/(2.0*EE)
+      CRE(P) =  DKRC(P)
+      CIM(P) =  DKIC(P)
+  215 CONTINUE
+      GO TO 250
+  220 ETA01 = 0.0
+      ZET01 = 0.0
+      R1SQX = 0.0
+      GO TO  210
+  230 ETA01 = Y0*CGS
+      ZET01 = 0.
+      R1SQX = ETA01**2
+      GO TO  210
+  250 CONTINUE
+      IF (AT1S .EQ. 0.0) GO TO 255
+      CALL IDF1V (EE,E2,ETA01,ZET01,NB,ARE,AIM,BRE,BIM,CRE,CIM,R1SQX,
+     1            XIIJR,XIIJI)
+      DO 252 P = 1,NB
+      DELR(P) = XMULT*XIIJR(P)
+      DELI(P) = XMULT*XIIJI(P)
+  252 CONTINUE
+  255 CONTINUE
+      IF (AT2S .EQ. 0.0) GO TO 260
+      DO 256 P = 1,NB
+      A2R(P) = (XKRI(P) - 2.0*XKRC(P) + XKRO(P))/(2.0*E2)
+      A2I(P) = (XKII(P) - 2.0*XKIC(P) + XKIO(P))/(2.0*E2)
+      B2R(P) = (XKRO(P) - XKRI(P))/(2.0*EE)
+      B2I(P) = (XKIO(P) - XKII(P))/(2.0*EE)
+      C2R(P) =  XKRC(P)
+      C2I(P) =  XKIC(P)
+  256 CONTINUE
+      CALL IDF2V (EE,E2,ETA01,ZET01,NB,A2R,A2I,B2R,B2I,C2R,C2I,R1SQX,
+     1            DIIJR,DIIJI)
+      DO 258 P = 1,NB
+      DELR(P) = DELR(P) + XMULT*DIIJR(P)
+      DELI(P) = DELI(P) + XMULT*DIIJI(P)
+  258 CONTINUE
+  260 CONTINUE
+      RETURN
+      END
+
+      SUBROUTINE IDF1V (EE,E2,ETA01,ZET01,NB,ARE,AIM,BRE,BIM,CRE,CIM,
+     1                  R1SQX,XIIJR,XIIJI)
+C
+C     HALO: IDF1 FOR NB SETS OF COEFFICIENTS (ONE GEOMETRY): THE
+C     LOGARITHM AND THE ARCTANGENT ONCE, THE REST PER SET, AS IDF1
+C
+      INTEGER      NB,P
+      REAL         ARE(NB),AIM(NB),BRE(NB),BIM(NB),CRE(NB),CIM(NB),
+     1             XIIJR(NB),XIIJI(NB),FACR,FACI,PARNR,PARNI,TRM1R,
+     2             TRM1I,TRM2R,TRM2I,TRM3R,TRM3I
+      PI   = 3.1415926
+      PARN = ETA01**2 - ZET01**2
+      UP   = (ETA01-EE)**2 + ZET01**2
+      DOWN = (ETA01+EE)**2 + ZET01**2
+      ARG2 = UP/DOWN
+      ALARG2 = ALOG(ARG2)
+      AZET = ABS(ZET01)
+      IF  ((AZET/EE) . LE . 0.001)  GO TO  100
+      TEST0= ABS((R1SQX-E2)/(2.0*EE*AZET))
+      IF (TEST0.LE.0.0001)  GO TO 110
+      COEF = (2.0*EE)/(R1SQX-E2)
+      ARGA = COEF*ZET01
+      TEST = ABS(ARGA)
+      IF (TEST.LE.0.3)  GO TO 120
+      ARGT = COEF*AZET
+      ATANA= ATAN(ARGT)
+      FUNCT= ATANA/AZET
+      GO TO 170
+  100 CONTINUE
+      FUNCT= (2.0*EE)/(ETA01**2-E2)
+      GO TO 170
+  110 CONTINUE
+      FUNCT= 0.0
+      GO TO 170
+  120 CONTINUE
+      S    = ARGA**2
+      SER  = 1./3.+S*(-1./5.+S*(1./7.+S*(-1./9.+S*(1./11.-S/13.))))
+      ALPHA= E2*(COEF**2)*SER
+      FUNCT= COEF*(1.0-ALPHA*(ZET01**2)/E2)
+  170 CONTINUE
+      DO 180 P = 1,NB
+      FACR = PARN*ARE(P) + ETA01*BRE(P) + CRE(P)
+      FACI = PARN*AIM(P) + ETA01*BIM(P) + CIM(P)
+      PARNR= BRE(P)/2.0  + ETA01*ARE(P)
+      PARNI= BIM(P)/2.0  + ETA01*AIM(P)
+      TRM2R= PARNR * ALARG2
+      TRM2I= PARNI * ALARG2
+      TRM3R= 2.0*EE* ARE(P)
+      TRM3I= 2.0*EE* AIM(P)
+      TRM1R= FACR * FUNCT
+      TRM1I= FACI * FUNCT
+      XIIJR(P)= TRM1R + TRM2R + TRM3R
+      XIIJI(P)= TRM1I + TRM2I + TRM3I
+  180 CONTINUE
+      RETURN
+      END
+
+      SUBROUTINE IDF2V (EE,E2,ETA01,ZET01,NB,A2R,A2I,B2R,B2I,C2R,C2I,
+     1                  R1SQX,DIIJR,DIIJI)
+C
+C     HALO: IDF2 FOR NB SETS OF COEFFICIENTS (ONE GEOMETRY), AS IDF1V
+C
+      INTEGER      NB,P,KASE
+      REAL         A2R(NB),A2I(NB),B2R(NB),B2I(NB),C2R(NB),C2I(NB),
+     1             DIIJR(NB),DIIJI(NB),FACR,FACI,TRM1R,TRM1I,TRM2R,
+     2             TRM2I,TRM3R,TRM3I,UP1R,UP1I,UP2R,UP2I
+      EPS  = 0.0001
+      AZET = ABS(ZET01)
+      DENO = R1SQX-E2
+      PARN = ETA01**2 + ZET01**2
+      ETA02=ETA01**2
+      ZET02= ZET01**2
+      IF  ((AZET/EE) . LE . 0.001)  GO TO  120
+      TEST0= ABS((R1SQX-E2)/(2.0*EE*AZET))
+      IF (TEST0.GT.0.1)  GO TO 120
+      DEN2 = (ETA01+EE)**2+ZET02
+      DEN3 = (ETA01-EE)**2+ZET02
+      FAC2A= R1SQX*ETA01+(ETA02-ZET02)*EE
+      FAC3A= R1SQX*ETA01-(ETA02-ZET02)*EE
+      FAC2B= R1SQX+ETA01*EE
+      FAC3B= R1SQX-ETA01*EE
+      IF (TEST0.LE.0.0001)  GO TO 110
+      COEF = (2.0*EE)/(R1SQX-E2)
+      ARGA = COEF*ZET01
+      TEST = ABS(ARGA)
+      IF  (TEST.GT.0.3)  GO TO 90
+      S    = ARGA**2
+      SER  = 1./3.+S*(-1./5.+S*(1./7.+S*(-1./9.+S*(1./11.-S/13.))))
+      ALPHA= E2*(COEF**2)*SER
+      FUNCT= COEF*(1.0-ALPHA*(ZET01**2)/E2)
+      GO TO 100
+   90 CONTINUE
+      ARGT = COEF*AZET
+      ATANA= ATAN(ARGT)
+      FUNCT= ATANA/AZET
+      GO TO 100
+  110 CONTINUE
+      FUNCT= 0.0
+  100 DO 105 P = 1,NB
+      FACR = PARN*A2R(P) + ETA01*B2R(P) + C2R(P)
+      FACI = PARN*A2I(P) + ETA01*B2I(P) + C2I(P)
+      TRM2R= (FAC2A*A2R(P)+FAC2B*B2R(P)+(ETA01+EE)*C2R(P))/DEN2
+      TRM2I= (FAC2A*A2I(P)+FAC2B*B2I(P)+(ETA01+EE)*C2I(P))/DEN2
+      TRM3R=-(FAC3A*A2R(P)+FAC3B*B2R(P)+(ETA01-EE)*C2R(P))/DEN3
+      TRM3I=-(FAC3A*A2I(P)+FAC3B*B2I(P)+(ETA01-EE)*C2I(P))/DEN3
+      TRM1R= FACR*FUNCT
+      TRM1I= FACI*FUNCT
+      DIIJR(P)= (TRM1R + TRM2R + TRM3R)/(2.0*ZET02)
+      DIIJI(P)= (TRM1I + TRM2I + TRM3I)/(2.0*ZET02)
+  105 CONTINUE
+      RETURN
+  120 CONTINUE
+      DENA = (ETA01+EE)**2 + ZET01**2
+      DENB = (ETA01-EE)**2 + ZET01**2
+      IF  ((AZET/EE) . LE . 0.001)  GO TO  130
+      COEF = (2.0*EE)/(R1SQX-E2)
+      ARGA = COEF*ZET01
+      TEST = ABS(ARGA)
+      IF  (TEST.GT.0.3)  GO TO 125
+      S    = ARGA**2
+      SER  = 1./3.+S*(-1./5.+S*(1./7.+S*(-1./9.+S*(1./11.-S/13.))))
+      ALPHA= E2*(COEF**2)*SER
+      FUNCT= COEF*(1.0-ALPHA*(ZET01**2)/E2)
+      GO TO 140
+  125 CONTINUE
+      ARGT= COEF*AZET
+      ATANA= ATAN(ARGT)
+      FUNCT= ATANA/AZET
+      ALPHA= (E2/ZET02)*(1.0-FUNCT*(DENO/(2.0*EE)))
+      GO TO 140
+  130 CONTINUE
+      ALPHA= ((2.0*E2)/(ETA02-E2))**2
+  140 DO 145 P = 1,NB
+      FACR = PARN*A2R(P) + ETA01*B2R(P) + C2R(P)
+      FACI = PARN*A2I(P) + ETA01*B2I(P) + C2I(P)
+      UP1R = 2.0*(E2*A2R(P) + C2R(P))
+      UP1I = 2.0*(E2*A2I(P) + C2I(P))
+      UP2R = 4.0*E2*ETA01*B2R(P)
+      UP2I = 4.0*E2*ETA01*B2I(P)
+      TRM1R= (UP1R *(R1SQX+E2) + UP2R )/(DENA*DENB)
+      TRM1I= (UP1I *(R1SQX+E2) + UP2I )/(DENA*DENB)
+      TRM2R= -ALPHA*FACR/E2
+      TRM2I= -ALPHA*FACI/E2
+      DIIJR(P)= EE*(TRM1R + TRM2R)/DENO
+      DIIJI(P)= EE*(TRM1I + TRM2I)/DENO
+  145 CONTINUE
+      RETURN
+      END
+
+
+      SUBROUTINE TKERV (X0,Y0,Z0,NK,KR,BR,SGR,CGR,SGS,CGS,T1,T2,M,
+     1                  K1RT1,K1IT1,K2RT2P,K2IT2P,K10T1,K20T2P)
+C
+C     HALO: TKER (IND = 1, THE INCREMENTAL OSCILLATORY KERNELS) FOR NK
+C     REDUCED FREQUENCIES KR(1..NK) AT ONCE - THE SAME GEOMETRY, THE
+C     SAME MACH. TKER'S BRANCHES (ICHUZ) AND ALL BUT K1 = KR R1/BR
+C     AND WHAT FOLLOWS FROM IT DEPEND ON THE GEOMETRY ALONE, SO THEY ARE
+C     WORKED OUT ONCE; EACH K-DEPENDENT STATEMENT OF TKER IS A LOOP OVER
+C     THE NK FREQUENCIES HERE, THE SAME EXPRESSION IN THE SAME ORDER, SO
+C     EACH FREQUENCY'S RESULT IS TKER'S TO THE BIT. THE LOOPS WITHOUT A
+C     LIBRARY CALL VECTORISE (THE ELEVEN DIVISIONS BY C1..C11 AND THE
+C     ELEVEN BY THOSE AGAIN ARE MOST OF TKER); SIN AND COS STAY THE
+C     SCALAR SINCOSF TKER CALLS, ONE FREQUENCY AT A TIME.
+C
+C     OUT: K1RT1 .. K2IT2P PER FREQUENCY, K10T1 AND K20T2P (THE SAME FOR
+C     ALL) - WHAT TKER LEAVES IN /DLM/ FOR INCRO; T1 AND T2 AS TKER
+C     SETS THEM.
+C
+      INTEGER      NK,NKM,K,ICHUZ
+      PARAMETER   (NKM = 16)
+      REAL         X0,Y0,Z0,KR(NK),BR,SGR,CGR,SGS,CGS,T1,T2,M
+      REAL         K1RT1(NK),K1IT1(NK),K2RT2P(NK),K2IT2P(NK),K10T1,
+     1             K20T2P
+      REAL         K10,K20,R1,R1S,EPS,C1,C2,C3,C4,C5,T2P,BETA2,BIGR,
+     1             MU1,MU,EXARG,E,C3G,C4G,C5G,C3B,C4B,C8
+      REAL         K1(NKM),K2(NKM),CC(NKM,11),RR(NKM,11),QQ(NKM,11),
+     1             I00R(NKM),I00I(NKM),J00R(NKM),I20R3(NKM),J00I(NKM),
+     2             I20I3(NKM),I10I(NKM),I10R(NKM),J0UR(NKM),J0UI(NKM),
+     3             I0UR(NKM),I0UI(NKM),I1UR(NKM),I1UI(NKM),I2UR3(NKM),
+     4             I2UI3(NKM),DK1R(NKM),DK1I(NKM),DK2R(NKM),DK2I(NKM),
+     5             C6(NKM),S6(NKM),CO6(NKM),A3(NKM),CA3(NKM),SA3(NKM),
+     6             A5(NKM),CA5(NKM),SA5(NKM),CK1R,CK1I,CK2R,CK2I,C9,CAR
+C
+      EPS    = 0.00001
+      K10    = 0.0
+      K20    = 0.0
+      DO 1 K = 1,NK
+      K1RT1(K)  = 0.0
+      K1IT1(K)  = 0.0
+      K2RT2P(K) = 0.0
+      K2IT2P(K) = 0.0
+    1 CONTINUE
+      K10T1  = 0.0
+      K20T2P = 0.0
+      R1     = SQRT(Y0*Y0 + Z0*Z0)
+      R1S    = R1
+      IF (ABS(R1) .GT. EPS) GO TO 200
+      IF (X0) 905,120,120
+  120 T1     = CGR*CGS + SGR*SGS
+      K10    = 2.0
+!GCC$ NOVECTOR
+      DO 125 K = 1,NK
+      C1     = KR(K)*X0/BR
+      K1RT1(K) = 2.0*T1*COS(C1)
+      K1IT1(K) =-2.0*T1*SIN(C1)
+  125 CONTINUE
+      K10T1  = 2.0*T1
+      GO TO  905
+  200 C1     = CGR
+      C2     = SGR
+      C3     = CGS
+      C4     = SGS
+      T2P    = (Z0*Z0*C1*C3 + Y0*Y0*C2*C4 - Z0*Y0*(C2*C3+C1*C4))
+      T2     = (100.*T2P)/(BR*BR)
+      IF (ABS(T2)-EPS) 210,220,220
+  210 ICHUZ  = 1
+      T1     = CGR*CGS + SGR*SGS
+      T2     = 0.0
+      GO TO 300
+  220 T1     = CGR*CGS + SGR*SGS
+      IF (ABS(T1)-EPS) 230,240,240
+  230 ICHUZ  = 2
+      T1     = 0.
+      GO TO 300
+  240 ICHUZ  = 3
+  300 BETA2  = (1.-M*M)
+      BIGR   = SQRT(X0*X0 + BETA2*R1*R1)
+      DO 305 K = 1,NK
+      K1(K)  = KR(K)*R1/BR
+  305 CONTINUE
+      MU1    = (M*BIGR-X0)/(BETA2*R1)
+      MU     = ABS(MU1)
+      DO 306 K = 1,NK
+      K2(K)  = K1(K)*K1(K)
+  306 CONTINUE
+      IF (MU1) 310,320,330
+  310 ICHUZ  = ICHUZ + 3
+      GO TO 330
+  320 ICHUZ  = ICHUZ + 6
+  330 CONTINUE
+      EXARG = -0.372*MU
+      IF (EXARG .GE. -180.0) GO TO 335
+      E   = 0.0
+      GO TO 337
+  335 E   = EXP(EXARG)
+  337 CONTINUE
+      DO 338 K = 1,NK
+      CC(K, 1) =  0.138384 + K2(K)
+      CC(K, 2) =  0.553536 + K2(K)
+      CC(K, 3) =  1.245456 + K2(K)
+      CC(K, 4) =  2.214144 + K2(K)
+      CC(K, 5) =  3.4596   + K2(K)
+      CC(K, 6) =  4.981824 + K2(K)
+      CC(K, 7) =  6.780816 + K2(K)
+      CC(K, 8) =  8.856576 + K2(K)
+      CC(K, 9) = 11.209104 + K2(K)
+      CC(K,10) = 13.8384   + K2(K)
+      CC(K,11) = 16.744464 + K2(K)
+      RR(K, 1) = .24186198 / CC(K, 1)
+      RR(K, 2) =-2.7918027 / CC(K, 2)
+      RR(K, 3) = 24.991079 / CC(K, 3)
+      RR(K, 4) =-111.59196 / CC(K, 4)
+      RR(K, 5) = 271.43549 / CC(K, 5)
+      RR(K, 6) =-305.75288 / CC(K, 6)
+      RR(K, 7) =-41.18363  / CC(K, 7)
+      RR(K, 8) = 545.98537 / CC(K, 8)
+      RR(K, 9) =-644.78155 / CC(K, 9)
+      RR(K,10) = 328.72755 / CC(K,10)
+      RR(K,11) =-64.279511 / CC(K,11)
+  338 CONTINUE
+      IF (ICHUZ .LT. 4) GO TO 340
+      DO 339 K = 1,NK
+      I00R(K) = .372*(RR(K,1) + 2.*RR(K,2) + 3.*RR(K,3) + 4.*RR(K,4)
+     1        + 5.*RR(K,5) + 6.*RR(K,6) + 7.*RR(K,7) + 8.*RR(K,8)
+     2        + 9.*RR(K,9) + 10.*RR(K,10) + 11.*RR(K,11))
+      I00I(K) =-K1(K)*(RR(K,1) + RR(K,2) + RR(K,3) + RR(K,4)
+     1        + RR(K,5) + RR(K,6) + RR(K,7) + RR(K,8) + RR(K,9)
+     2        + RR(K,10) + RR(K,11))
+  339 CONTINUE
+  340 GO TO (420,350,350,390,350,350,380,350,350), ICHUZ
+  350 DO 351 K = 1,NK
+      QQ(K, 1) = RR(K, 1)/CC(K, 1)
+      QQ(K, 2) = RR(K, 2)/CC(K, 2)
+      QQ(K, 3) = RR(K, 3)/CC(K, 3)
+      QQ(K, 4) = RR(K, 4)/CC(K, 4)
+      QQ(K, 5) = RR(K, 5)/CC(K, 5)
+      QQ(K, 6) = RR(K, 6)/CC(K, 6)
+      QQ(K, 7) = RR(K, 7)/CC(K, 7)
+      QQ(K, 8) = RR(K, 8)/CC(K, 8)
+      QQ(K, 9) = RR(K, 9)/CC(K, 9)
+      QQ(K,10) = RR(K,10)/CC(K,10)
+      QQ(K,11) = RR(K,11)/CC(K,11)
+  351 CONTINUE
+      GO TO (420,410,410,390,360,360,380,360,360), ICHUZ
+  360 DO 361 K = 1,NK
+      J00R(K) = QQ(K,1)*(.138384-K2(K))+QQ(K,2)*(.553536-K2(K))
+     1        + QQ(K,3)*(1.245456-K2(K))+QQ(K,4)*(2.214144-K2(K))
+     2        + QQ(K,5)*(3.4596-K2(K))+QQ(K,6)*(4.981824-K2(K))
+     3        + QQ(K,7)*(6.780816-K2(K))+QQ(K,8)*(8.856576-K2(K))
+     4        + QQ(K,9)*(11.209104-K2(K))+QQ(K,10)*(13.8384-K2(K))
+     5        + QQ(K,11)*(16.744464-K2(K))
+      I20R3(K) = 2.+K1(K)*I00I(K)+K2(K)*J00R(K)
+  361 CONTINUE
+      GO TO  (420,410,410,390,410,390,380,370,370),ICHUZ
+  370 DO 371 K = 1,NK
+      J00I(K) = -K1(K)*(.744*QQ(K,1)+1.488*QQ(K,2)+2.232*QQ(K,3)
+     1        + 2.976*QQ(K,4)+3.72*QQ(K,5)+4.464*QQ(K,6)
+     2        + 5.208*QQ(K,7)+5.952*QQ(K,8)+6.696*QQ(K,9)
+     3        + 7.44*QQ(K,10)+8.184*QQ(K,11))
+      I20I3(K) = -K1(K)*I00R(K)+K2(K)*J00I(K)
+  371 CONTINUE
+      IF (ICHUZ .EQ. 8) GO TO 500
+  380 DO 381 K = 1,NK
+      I10I(K) = -K1(K)*I00R(K)
+  381 CONTINUE
+  390 DO 391 K = 1,NK
+      I10R(K) = 1.+ K1(K)*I00I(K)
+  391 CONTINUE
+      GO TO (420,410,410,420,410,410,500,500,500), ICHUZ
+  410 DO 411 K = 1,NK
+      J0UR(K) = E*(QQ(K,1)*(0.138384 - K2(K) + 0.372*MU*CC(K,1)) +
+     1       E*(QQ(K,2)*(0.553536 - K2(K) + 0.744*MU*CC(K,2)) +
+     2       E*(QQ(K,3)*(1.245456 - K2(K) + 1.116*MU*CC(K,3)) +
+     3       E*(QQ(K,4)*(2.214144 - K2(K) + 1.488*MU*CC(K,4)) +
+     4       E*(QQ(K,5)*(3.4596   - K2(K) + 1.860*MU*CC(K,5)) +
+     5       E*(QQ(K,6)*(4.981824 - K2(K) + 2.232*MU*CC(K,6)) +
+     6       E*(QQ(K,7)*(6.780816 - K2(K) + 2.604*MU*CC(K,7)) +
+     7       E*(QQ(K,8)*(8.856576 - K2(K) + 2.976*MU*CC(K,8)) +
+     8       E*(QQ(K,9)*(11.209104- K2(K) + 3.348*MU*CC(K,9)) +
+     9       E*(QQ(K,10)*(13.8384 - K2(K) + 3.72*MU*CC(K,10)) +
+     O       E*(QQ(K,11)*(16.744464-K2(K) + 4.092*MU*CC(K,11)))
+     A       ))))))))))
+      J0UI(K) = -K1(K)*(E*(QQ(K,1)*(0.744 + MU*CC(K,1)) +
+     1          E*(QQ(K,2)*(1.488 + MU*CC(K,2)) +
+     2          E*(QQ(K,3)*(2.232 + MU*CC(K,3)) +
+     3          E*(QQ(K,4)*(2.976 + MU*CC(K,4)) +
+     4          E*(QQ(K,5)*(3.720 + MU*CC(K,5)) +
+     5          E*(QQ(K,6)*(4.464 + MU*CC(K,6)) +
+     6          E*(QQ(K,7)*(5.208 + MU*CC(K,7)) +
+     7          E*(QQ(K,8)*(5.952 + MU*CC(K,8)) +
+     8          E*(QQ(K,9)*(6.696 + MU*CC(K,9)) +
+     9          E*(QQ(K,10)*(7.44 + MU*CC(K,10))+
+     O          E*(QQ(K,11)*(8.184+ MU*CC(K,11)))
+     A          )))))))))))
+  411 CONTINUE
+  420 DO 421 K = 1,NK
+      I0UR(K) = .372*E*(RR(K,1)+E*(2.*RR(K,2)+E*(3.*RR(K,3)+
+     1          E*(4.*RR(K,4)+E*(5.*RR(K,5)+E*(6.*RR(K,6)+
+     2          E*(7.*RR(K,7)+E*(8.*RR(K,8)+E*(9.*RR(K,9)+
+     3          E*(10.*RR(K,10)+E*11.*RR(K,11)))))))))))
+      I0UI(K) = -K1(K)*(E*(RR(K,1)+E*(RR(K,2)+E*(RR(K,3)+
+     1          E*(RR(K,4)+E*(RR(K,5)+E*(RR(K,6)+E*(RR(K,7)+
+     2          E*(RR(K,8)+E*(RR(K,9)+E*(RR(K,10)+E*RR(K,11)
+     3          )))))))))))
+      C6(K) = K1(K)*MU
+  421 CONTINUE
+      R1   = R1S
+!GCC$ NOVECTOR
+      DO 422 K = 1,NK
+      S6(K)  = SIN(C6(K))
+      CO6(K) = COS(C6(K))
+  422 CONTINUE
+      C3G  = SQRT(1.+MU*MU)
+      C4G  = MU/C3G
+      C5G  = C4G/(1.+MU*MU)
+      GO TO (430,440,430,430,440,430,500,500,500), ICHUZ
+  430 DO 431 K = 1,NK
+      I1UR(K) = CO6(K)*(1.-C4G+K1(K)*I0UI(K)) - S6(K)*K1(K)*I0UR(K)
+      I1UI(K) =-CO6(K)*K1(K)*I0UR(K) - S6(K)*(1.-C4G+K1(K)*I0UI(K))
+  431 CONTINUE
+      GO TO (500,440,440,460,440,440,500,500,500), ICHUZ
+  440 DO 441 K = 1,NK
+      I2UR3(K) = CO6(K)*(2.*(1.-C4G)-C5G+K1(K)*I0UI(K)+K2(K)*J0UR(K))
+     1         + S6(K)*(C6(K)*(1.-C4G)-K1(K)*I0UR(K) + K2(K)*J0UI(K))
+      I2UI3(K) = CO6(K)*(C6(K)*(1.-C4G)-K1(K)*I0UR(K)+K2(K)*J0UI(K))
+     1         - S6(K)*(2.*(1.-C4G)-C5G+K1(K)*I0UI(K) + K2(K)*J0UR(K))
+  441 CONTINUE
+      GO TO (500,500,500,460,450,450,500,500,500), ICHUZ
+  450 DO 451 K = 1,NK
+      I2UR3(K) = 2.0*I20R3(K) - I2UR3(K)
+  451 CONTINUE
+      IF (ICHUZ-6) 500,460,500
+  460 DO 461 K = 1,NK
+      CAR  = 2.*I10R(K) - I1UR(K)
+      I1UR(K) = CAR
+  461 CONTINUE
+  500 R1   = R1S
+      DO 501 K = 1,NK
+      DK1R(K) = 0.
+      DK1I(K) = 0.
+      DK2R(K) = 0.
+      DK2I(K) = 0.
+      A3(K)   = K1(K)*MU1
+      A5(K)   = KR(K)*X0/BR
+  501 CONTINUE
+!GCC$ NOVECTOR
+      DO 502 K = 1,NK
+      CA3(K)  = COS(A3(K))
+      SA3(K)  = SIN(A3(K))
+  502 CONTINUE
+      C3B  = M*R1/BIGR
+      C4B  = SQRT(1.+MU1*MU1)
+!GCC$ NOVECTOR
+      DO 503 K = 1,NK
+      CA5(K)  = COS(A5(K))
+      SA5(K)  = SIN(A5(K))
+  503 CONTINUE
+      GO TO (530,540,530,530,540,530,510,520,510), ICHUZ
+  510 DO 511 K = 1,NK
+      I1UR(K) = I10R(K)
+      I1UI(K) = I10I(K)
+  511 CONTINUE
+      IF (ICHUZ-7) 520,530,520
+  520 DO 521 K = 1,NK
+      I2UR3(K) = I20R3(K)
+      I2UI3(K) = I20I3(K)
+  521 CONTINUE
+      IF (ICHUZ-8) 530,540,530
+  530 K10  = 1.0 + X0/BIGR
+      DO 531 K = 1,NK
+      CK1R = I1UR(K) + C3B*CA3(K)/C4B
+      CK1I = I1UI(K) - C3B*SA3(K)/C4B
+      DK1R(K) = CK1R*CA5(K) + CK1I*SA5(K)
+      DK1I(K) = CK1I*CA5(K) - CK1R*SA5(K)
+  531 CONTINUE
+      GO TO (900,540,540,900,540,540,900,540,540), ICHUZ
+  540 C8   = (BETA2*(R1/BIGR)**2 + (2.+MU1*C3B)/(C4B*C4B))*(-C3B/C4B)
+      K20  = -2.0 - X0*(2.0+BETA2*(R1/BIGR)**2)/BIGR
+      DO 541 K = 1,NK
+      C9   = (K1(K)*C3B)*( C3B/C4B)
+      CK2R = -I2UR3(K) + C8*CA3(K) - C9*SA3(K)
+      CK2I = -I2UI3(K) - C9*CA3(K) - C8*SA3(K)
+      DK2R(K) = CK2R*CA5(K) + CK2I*SA5(K)
+      DK2I(K) = CK2I*CA5(K) - CK2R*SA5(K)
+  541 CONTINUE
+  900 CONTINUE
+      DO 901 K = 1,NK
+      K1RT1(K)  = T1 *DK1R(K)
+      K1IT1(K)  = T1 *DK1I(K)
+      K2RT2P(K) = T2P*DK2R(K)
+      K2IT2P(K) = T2P*DK2I(K)
+  901 CONTINUE
+      K10T1  = K10*T1
+      K20T2P = K20*T2P
+  905 CONTINUE
+      RETURN
+      END

@@ -412,14 +412,35 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
         "files are joined into %s.out in subcase order.",
         n, jobs, stem);
 
-    /* the in-core aerodynamic solve (mis/ampcz.f) is threaded; with jobs
-     * children side by side each gets its share of the processors        */
+    /* the threads of the children. What a child threads is of two kinds:
+     * coarse work shared out a task at a time - the doublet lattice rows
+     * (mis/gendp.f) and the PK loops (mis/fa1pkp.f) - and the in-core LU
+     * of the aerodynamic matrix (mis/ampczs), fine-grained, a parallel
+     * region per block. The children finish at different times (the
+     * lowest Mach has the most reduced frequencies, and its loops take
+     * the longest), so an even split leaves the finished children's
+     * processors idle while the last one works on its share. Each child
+     * is given every processor for the coarse work instead, and waits
+     * for work passively: the scheduler shares the processors among the
+     * children while they all run and hands them to whoever is left.
+     * The LU is held to the even share (N95_BLAS_THREADS), because a
+     * fine-grained parallel region oversubscribed spends its time
+     * waiting. Measured on the monarch deck (five Machs, 32 processors):
+     * 102 s with the even split, 87 s this way; spinning waits instead
+     * of passive ones, 400 s. A caller's OMP_NUM_THREADS is taken as it
+     * is, with the LU following it as before.                          */
     if (!getenv("OMP_NUM_THREADS")) {
-        char omp[40];
-        int  th = flut_processors() / jobs;
-        if (th < 1) th = 1;
-        snprintf(omp, sizeof(omp), "%d", th);
-        flut_setenv("OMP_NUM_THREADS", omp);
+        char num[40];
+        int  procs = flut_processors();
+        int  share = procs / jobs;
+        if (share < 1) share = 1;
+        snprintf(num, sizeof(num), "%d", procs);
+        flut_setenv("OMP_NUM_THREADS", num);
+        if (!getenv("OMP_WAIT_POLICY")) flut_setenv("OMP_WAIT_POLICY", "PASSIVE");
+        if (!getenv("N95_BLAS_THREADS")) {
+            snprintf(num, sizeof(num), "%d", share);
+            flut_setenv("N95_BLAS_THREADS", num);
+        }
     }
 
     /* the children, jobs at a time, each translated as it starts */

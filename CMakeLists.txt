@@ -311,9 +311,19 @@ endif()
 # column; the blocked one works out of cache at the rate of ZGEMM.
 set(NASTRAN_LAPACK_LIBRARIES "" CACHE STRING
     "LAPACK/BLAS archive(s) for the in-core doublet lattice solve (AMPCZS)")
+# ampczt_openblas.f tells OpenBLAS its thread count, which a static
+# executable has to (see that file); any other LAPACK gets ampczt_none.f.
 if(NASTRAN_LAPACK_LIBRARIES)
   set(AMPCZS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mis/ampczs/ampczs_lapack.f")
   target_link_libraries(nas PUBLIC ${NASTRAN_LAPACK_LIBRARIES})
+  string(TOLOWER "${NASTRAN_LAPACK_LIBRARIES}" _lapack_lower)
+  if(_lapack_lower MATCHES "openblas")
+    target_sources(nas PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/mis/ampczs/ampczt_openblas.f")
+  else()
+    target_sources(nas PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/mis/ampczs/ampczt_none.f")
+  endif()
 else()
   set(AMPCZS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mis/ampczs/ampczs_builtin.f")
 endif()

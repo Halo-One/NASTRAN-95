@@ -666,11 +666,33 @@ Three things the first tries taught:
    the banner, already in MSC's layout - are spliced into the print after
    each sorted echo (`msc_f06`), where a run of its own prints them.
 
-The joined print of the restart is the direct run's to every printed
-digit: the summaries, the PK modal vectors and the physical eigenvectors
-at the marked points, the merged sorted echo the grid reader reads. The
-two-subcase test deck holds it (`test_nastran95ase_flutter_subcases`,
-`decks/two_subcase_modes.dat`). A run with a marked point restarted off
+5. **The restart tables.** NASTRAN re-executes a DMAP statement on a
+   modified restart when a card of one of the statement's `****CARD`
+   bits changed (the table under `$*CARD BITS` in `rf/AERO10`: bit 36
+   is FLFACT / FLUTTER, 34-40 the flutter cards together). FA1 and FA2
+   carry 34-40, so a restart whose own cards are the flutter cards
+   solves the flutter again; VDR, its OFP, the XY section and everything
+   from MODACC to the OFPs of the recovered vectors carried bit 21
+   (AOUT$) alone, which the rigid-format-switch restart does not set -
+   VDR was skipped, NOP kept the tape's value, `COND FINIS,PJUMP`
+   jumped, and the restarted print had the PK modal vectors but no
+   COMPLEX EIGENVECTOR tables. With the recovery re-executed, SDR1
+   stopped in MERGE (SFM 3007): `EQUIV GO,GOD/NOUE/GM,GMD/NOUE` (bits
+   without 34-40) had been skipped as well, and GMD is not on an RF3
+   tape. Every statement from `LABEL VDR` to `LABEL FINIS`, that EQUIV
+   and the PFILE PARAM now carry 34-40 too.
+
+On the two-subcase test deck the joined print of the restart is the
+direct run's to every printed digit: the summaries, the PK modal vectors
+and the physical eigenvectors at the marked points, the merged sorted
+echo the grid reader reads (`test_nastran95ase_flutter_subcases`,
+`decks/two_subcase_modes.dat` holds it). On the monarch the summaries
+agree to six significant figures and not beyond (a 30-mode single-Mach
+deck: 258 of 1,830 rows differ in the seventh digit, damping
+-7.632827E-03 against -7.632829E-03): the modal basis off the tape and
+the one a direct run's READ computes in the same job are FEER's answer
+to the last bit, not to the last printed digit, and the flutter
+solution follows them there. Nothing a crossing can see. A run with a marked point restarted off
 a checkpoint whose modes run had `DISP` output once stopped in MERGE
 (SFM 3007) - the repository's modes deck prints the eigenvectors at the
 elastic axis nodes and the flutter restarts have run clean since; kept

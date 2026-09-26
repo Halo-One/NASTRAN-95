@@ -159,6 +159,20 @@ before the solver sees it and the print file after the solver is done.
 | `CMakeLists.txt` | C added to the project; `NASTRAN_ASE_MODE` configured twice; the `msc/` sources in the library. |
 | `mds/hexit.f`, `mds/HSTATE.COM` | `HASE` state; the print-file rewrite and the fatal explainer called on the way out. |
 
+**Direct matrix input in case control (2026-09-26).** `K2PP`, `B2PP`, `M2PP` and `TFL`
+were not on the translator's list of case control that NASTRAN-95 reads with the same
+meaning (`case_keep`, `msc/mscexec.c`). They were therefore dropped, and a `DMIG` added
+to the stiffness, damping or mass that way never reached the solver, or a SOL 145
+driver's children. They are kept now. The check used a flutter deck with per-subcase
+steady-lift `K2PP`/`B2PP` DMIGs (8 subcases, 3 PKNL points each: the trim-load study of
+the monarch's h-stab mounts), run against Simcenter Nastran 2606's print of the same
+deck:
+- the outer-boom pair agrees at every airspeed to the printed digits;
+- the crossing is 18.037 m/s at 4.185 Hz in both;
+- the zero-load twin gives the no-load numbers.
+
+`M2PP` and `TFL` are kept by the same reasoning but are untested.
+
 ## Never hang: the FEER guards and the watchdog
 
 A 830-grid modal deck (lumped masses on rigid bars, the shape of every model in
@@ -215,7 +229,7 @@ buffering turned off:
   (`TMTOGO`), so a loop inside a module is invisible to it. A second thread now
   sleeps for the allowed wall-clock time and ends the process with `_exit(2)` and
   a message saying which limit applied, that the print file stops where the
-  solver was, that the scratch directory is left behind, and how to raise the
+  solver was, that the scratch directory is removed (below), and how to raise the
   limit. `_exit` and not `exit`, because the main thread may be inside a Fortran
   `WRITE` with a unit locked, and running the runtime's clean-up over that from
   another thread is not safe. The limit is `N95_TIMEOUT` from the environment
@@ -223,7 +237,42 @@ buffering turned off:
   own default of 5 minutes when it is missing, the same number the solver
   prints), else 30 minutes for `nastran95ase`, whose translated decks carry a
   `TIME` that means nothing to the user; the 5,400-grid decks it exists for
-  take two minutes.
+  take two minutes. The POSIX thread sleeps with `nanosleep`, restarted after a
+  signal. Until 2026-09-26 it used `usleep`, whose `useconds_t` is 32 bits, so
+  any limit past 71.6 minutes wrapped: `N95_TIMEOUT=300` fired after 820 s.
+* **The scratch directory on the ways out the exit handler misses**
+  (`msc/mscwatch.c`, `msc/mscflut.c`, `mds/hmsc.f`, `bin/nastrn.f.in`,
+  2026-09-26). A run's scratch is `<TMPDIR or /tmp>/n95_<pid>`, gigabytes for a
+  flutter run. The exit handler (`HCLEAN`) removes it at a normal end and after a
+  fatal. A killed run left it behind, and on a machine whose `/tmp` is a tmpfs a
+  morning of killed runs filled it. The next runs then stopped at a GINO I/O
+  error. Now:
+  - The main program hands the directory it made to `msc_scratch_dir` (`HMSCSD`).
+  - The watchdog's `_exit`, and handlers for SIGTERM, SIGINT, SIGHUP, SIGSEGV,
+    SIGBUS, SIGFPE and SIGILL, remove that one directory: its files, then the
+    directory. On Linux this is async-signal-safe (`getdents64`, `unlinkat`,
+    `rmdir`). The handler that was there before then runs (the Fortran runtime's
+    backtrace). A signal the process was started ignoring, such as under
+    `nohup` or a background job's SIGINT, stays ignored.
+  - The SOL 145 driver removes each child's directory after waiting for it. The
+    path is the exact one the child wrote into `s<id>/n95_scratch.txt`
+    (`N95_SCRATCH_NOTE`), so this covers a child that was SIGKILLed or crashed,
+    and on Windows a child whose files were open when it ended.
+  - On Windows the driver's console handler (Ctrl-C, closing the window) ends the
+    job, waits for the children and removes their directories.
+
+  Only the run's own directory is removed, by its exact path: never a pattern,
+  never another process's. `N95_KEEP_SCRATCH=1` keeps every scratch directory.
+  A SIGKILLed top-level run, and a Windows top-level run that ends with files
+  open, still leave theirs. Checked on Linux, each case in a `TMPDIR` of its own:
+  - the watchdog on the five-Mach deck leaves nothing (with the keep switch, the
+    five children's directories);
+  - SIGTERM to a modes run removes its directory, while a second run sharing the
+    `TMPDIR` keeps its own and later finishes clean;
+  - a user fatal (UFM 328) leaves nothing;
+  - a SIGKILL to one child of the SOL 145 driver: that child's directory goes,
+    the other four children finish, and nothing is left;
+  - a normal run is unchanged and leaves nothing.
 * **`mds/hexit.f`, `bin/nastrn.f.in`: the MSC-deck notice.** The 1970s
   executable handed an MSC deck fails on the first executive-control line with
   `UFM 300`, which the explainer described, truthfully and uselessly, as a field
@@ -1179,6 +1228,48 @@ Cost, the committed five-Mach monarch deck, 32 threads: parabolic 50 s wall (AMG
 s); quartic 68 s (AMG 615 CPU s: five kernel evaluations in double precision against
 TKERV's three in single precision, vectorised eight wide). With `N95_AERO_CACHE` the
 kernel is paid once per aerodynamic model.
+
+### A secant step in the PK iteration (`N95_PK_SECANT`, off by default)
+
+PK finds each root's reduced frequency by fixed-point iteration: from `k`, solve the
+eigenproblem at `k`, and take the root's `omega` for the next `k`. That is one QR
+solve of the 240-square matrix per step, until the change is under `EPS`.
+`N95_PK_SECANT=1` replaces NASA's step with a secant on the residual `h(k) =
+k_from_root(k) - k` once two iterates exist, in both the threaded loop (`FA1PKL`) and
+the serial one (`FA1PKE`; not under DIAG 39). The secant step falls back to NASA's when
+it would be non-positive or more than twice NASA's. `N95_PK_STATS=1` counts the QR
+solves per root and prints a histogram to stderr. That counting moves no bits.
+
+Checked on Linux:
+- Off (the default), the five-Mach monarch print is identical to the build without it,
+  and so are NASA's 132 demos. The exceptions are the scratch path in eleven fatal
+  dumps and one timing table.
+- On, the serial and the threaded solves are bit-identical at `EPS` 1e-3 and 1e-4.
+
+What it buys, in QR solves per root:
+
+| deck | EPS | NASA's step | secant |
+|---|---|---|---|
+| monarch Mach 0.10, fixed density | 1e-3 | 2.24 | 1.68 |
+| monarch Mach 0.10, fixed density | 1e-4 | 3.25 | 2.10 |
+| five-Mach monarch, study form (PKVECT off) | 1e-3 | 1.285 | 1.204 |
+| five-Mach monarch, study form (PKVECT off) | 1e-4 | 1.826 | 1.608 |
+
+On the five-Mach deck that is 3-4 % of wall: 80 to 78 s, and 86 to 82 s, one loaded run
+each. Most roots already converge in one or two solves.
+
+What it changes:
+- The lowest crossing per Mach moves by at most 0.001 m/s, under both rule sets.
+- About a tenth of the root values between 0.6 and 20 Hz land on a different branch.
+  These are mostly heavily damped roots (g below -0.3). Changing `EPS` does the same
+  thing with NASA's step.
+- Some crossings above the lowest move, or appear or go.
+- On the benchmark HALE wing (converged 31.5619 m/s), EPS 1e-3 gives 31.5679 with NASA's
+  step and 31.5548 with the secant; at 1e-4 both give 31.562.
+- NASA's flutter demos d10021a and d10022a print identically with it on; d10023a agrees
+  to the sixth digit.
+
+It is an opt-in for the lowest crossing, not a default.
 
 ### What is still serial
 

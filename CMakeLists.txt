@@ -384,6 +384,11 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   endif()
 endif()
 
+# msc/mscaec.c (Halo One, 2026) is the aerodynamic matrix cache that AMG
+# and AMP use when N95_AERO_CACHE names a directory: its hash runs over
+# every AJJ, so it is compiled -O2 (plain C, no floating point).
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/msc/mscaec.c"
+    PROPERTIES COMPILE_OPTIONS "-O2")
 # mds/n95fast.f (Halo One, 2026) holds the word copy, zero fill and
 # nonzero count that GINO's PACK and UNPACK now hand whole runs of
 # elements to when they need no conversion, and the sorted-list search

@@ -1049,6 +1049,68 @@ in the last digits of eigenvector components, with every crossing the same. NASA
 decomposition count, which also differs between two builds of Jon's own source)
 and the two AERO 11 gust decks (the in-core gust solve, as before).
 
+### The aerodynamic cache: many structures, one aerodynamic model
+
+Branch `halo-ase-sol145-perf` (2026-09-26). A flutter sensitivity study solves one
+aircraft many times with the structure changed - stiffness scale factors, masses
+added or taken away - and the aerodynamic model the same. What of a SOL 145 run
+depends on the structure is the modes and what is built on them: GKI = GTKA(T) PHI,
+DJH = D1JK GKI + ik D2JK GKI, QJH, QKH, QHH, and FA1. What does not is AJJ for each
+(Mach, k) pair (AMG), and its LU factors (AMP) - on the monarch study deck (the
+five-Mach flutter deck with PKVECT off, `scaled_flutter_deck`) AMG and AMP were 257 of
+578 CPU seconds. Simcenter's PFAERO subDMAP makes the same split ("all processing of
+the aerodynamic data that is independent of the structural model"), and MSC and
+ZAERO keep the aerodynamic matrices for restarts with a changed structure.
+
+With `N95_AERO_CACHE=<directory>` in the environment:
+
+* AMG (`DLAMGK` in `mis/amgk.f`) keeps each pair's AJJ, the elements GENDK computes,
+  under a key that is a hash of every input they depend on - the group's ACPT record
+  (the box geometry) and its four counts, NJ, the symmetry flags, the reference
+  chord, the Mach number, the pair's reduced frequency, and a kernel version word
+  (`IAECV`, to be changed with the kernel). A batch whose every pair is there is read
+  instead of computed.
+* AMP (`AMPKC` in `mis/ampk.f`) keeps each pair's LU factors and pivots (ZGETRF, the
+  LAPACK solve only: with `N95_AJJ_SOLVE=builtin`, or a build without LAPACK, the
+  built-in LU factors and solves in one call and nothing is kept), under a hash of
+  the AJJ as read. A hit goes straight to ZGETRS (`AMPCZQ`); a miss factors
+  (`AMPCZF`), stores and solves. `AMPCZF` + `AMPCZQ` are `AMPCZR`'s two calls.
+
+`msc/mscaec.c` holds the hash (64-bit, a multiply-xorshift over 8-byte words), the
+files (`<key>.1` AJJ, `<key>.2` LU; a header with magic, key and sizes checked on
+reading) and the counts reported on standard error at exit (`N95_AERO_CACHE: AMG
+(AJJ) 48 of 48 pairs from the cache`). The print file is not told, so a cached run's
+print can be diffed against an uncached one. Entries are written as a temporary file
+and renamed into place, so runs side by side can share a directory: two writing one
+entry leave one of two identical files (POSIX `rename` replaces; on Windows it
+refuses and the temporary is removed), a reader sees a whole file or none. Nothing is
+deleted: empty the directory when the aerodynamic model is gone.
+
+**It gives the uncached print to the bit, by construction**: an entry is found only
+for the same input bits and holds the bytes the computation leaves (AMGK's batched,
+threaded kernel is the serial loop's bits; ZGETRF on one thread, as AMPK calls it, is
+the same every time). Checked on the monarch decks, each against the same build with
+the cache off: the committed 110-mode PKVECT deck (10,070,885 lines) and the study
+deck (154,119 lines), a run that fills an empty cache and one that finds every pair,
+0 differing lines each (`compare_prints.sh`); the build with the cache off against
+1d8307a's committed executable, 0 lines; NASA's 132 demos as 1d8307a's (the
+differences are the run directory's name in a fatal dump's DSNAME line, and
+d01002a's measured GINO timings).
+
+What it saves (the monarch study deck, 32 threads, other jobs on the machine):
+
+| | wall | CPU | AMG | AMP |
+|---|---|---|---|---|
+| no cache | 28.3 s | 578 s | 106 s | 151 s |
+| filling the cache | 29.3 s | 588 s | 107 s | 182 s |
+| every pair from the cache | 21.5 s | 353 s | 6 s | 69 s |
+
+FA1 is then 70 % of what is left. The cache is 21 GB for the five Machs' 178 pairs
+(42 MB of AJJ and 83 MB of LU each, at 2,282 boxes). Read cold from disk (the
+entries evicted from the page cache first, `posix_fadvise` DONTNEED) the hit run took
+20.2 s against 19.6 s warm: the NVMe reads 3.4 GB/s, and the five children read their
+Machs' entries side by side.
+
 ### What is still serial
 
 FA1 is now seven tenths of the CPU and nearly all of it NASA's 240-square QR (HSBG +

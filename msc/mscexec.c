@@ -95,6 +95,7 @@ static const char *case_keep[] = {
     "STRESS", "ELFORCE", "FORCE", "SET", "SUBCASE", "SUBCOM",
     "SUBSEQ", "SYMMETRY", "REPCASE", "OUTPUT", "AXISYMMETRIC",
     "MODES", "SVECTOR", "THERMAL", "FLUX", "TRIM",
+    "K2PP", "B2PP", "M2PP", "TFL",
     NULL
 };
 

@@ -105,6 +105,37 @@ static long flut_mem_avail_mb(void)
 #endif
 }
 
+#ifdef _WIN32
+/* HALO: the Windows twin of PR_SET_PDEATHSIG. Every child is put in one
+ *   job object the driver holds, created with KILL_ON_JOB_CLOSE: when the
+ *   driver ends - finished, stopped by its watchdog, or killed by the user
+ *   or by a test's timeout - Windows closes its handle and ends every child
+ *   still in the job, instead of leaving them solving for nobody (and
+ *   holding the executable, so a rebuild cannot replace it). Nested jobs
+ *   work from Windows 8 on, so a driver that is itself in a job (an IDE, a
+ *   CI runner) still gets its own. A child not assigned (the call failing)
+ *   just runs as before.                                                 */
+static HANDLE flut_job(void)
+{
+    static HANDLE job = NULL;
+    static int    tried = 0;
+    if (!tried) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info;
+        tried = 1;
+        job = CreateJobObjectA(NULL, NULL);
+        if (job) {
+            memset(&info, 0, sizeof(info));
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info))) {
+                CloseHandle(job);
+                job = NULL;
+            }
+        }
+    }
+    return job;
+}
+#endif
+
 /* an environment variable for the children. Windows' _putenv copies the
  * string; POSIX putenv would keep the caller's, so setenv there       */
 static void flut_setenv(const char *name, const char *value)
@@ -373,6 +404,8 @@ static flut_proc start_child(const char *full, const char *exe, const char *dir,
             h = _spawnl(_P_NOWAIT, exe, "nastran95ase", "--cosmic", q1, q2, NULL);
         }
         proc = (h == -1) ? FLUT_NOPROC : (HANDLE) h;
+        if (proc != FLUT_NOPROC && flut_job() != NULL)
+            AssignProcessToJobObject(flut_job(), proc);
     }
 #else
     /* the arguments arrive as written - nothing re-parses them - so they

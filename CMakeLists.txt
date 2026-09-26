@@ -434,6 +434,14 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
       PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off")
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
     set(_isa_flag "-march=x86-64-v3")
+    # Windows x64 promises a 16-byte aligned stack, and gcc for Windows
+    # does not realign it to 32 for AVX spills (GCC bug 54412): an aligned
+    # vmovaps to a 32-byte stack slot faults at random. The assembler
+    # option turns every aligned vector move into its unaligned twin,
+    # which costs nothing on AVX2 hardware and cannot fault.
+    if(WIN32)
+      set(_isa_flag "-march=x86-64-v3;-Wa,-muse-unaligned-vector-move")
+    endif()
   else()
     set(_isa_flag "")
   endif()

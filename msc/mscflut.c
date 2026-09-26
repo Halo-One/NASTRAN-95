@@ -67,7 +67,17 @@ typedef pid_t flut_proc;
 static int flut_processors(void)
 {
 #ifdef _WIN32
+    /* the processors of this process's affinity mask, as Linux counts
+     * sched_getaffinity: `start /affinity FFF nastran95ase ...` (the
+     * compute cores of a hybrid laptop, no low-power ones) is honoured, and
+     * libgomp sizes its default team from the same mask             */
     SYSTEM_INFO si;
+    DWORD_PTR   mask = 0, system_mask = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &mask, &system_mask) && mask != 0) {
+        int n = 0;
+        for (; mask; mask >>= 1) n += (int) (mask & 1);
+        return n;
+    }
     GetSystemInfo(&si);
     return si.dwNumberOfProcessors > 0 ? (int) si.dwNumberOfProcessors : 1;
 #else

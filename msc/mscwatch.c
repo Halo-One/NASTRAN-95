@@ -38,6 +38,32 @@
 static double wd_minutes;
 static char   wd_note[1024];
 
+#ifdef _WIN32
+/* HALO: Windows 11 runs a process whose window is minimised or in the
+ * background - a solver started by MATLAB's system(), a study driver's
+ * children - under EcoQoS when it may: efficiency cores, lowered clocks
+ * (the "power throttling" of execution speed). A solver wants the
+ * opposite, so every executable of this build opts itself out before
+ * main (SetProcessInformation, ProcessPowerThrottling, the execution
+ * speed bit controlled and cleared; no administrator needed, per
+ * process: each child does it for itself). Looked up at run time, so the
+ * executable still starts on a Windows without the call (before 8), and
+ * a failure changes nothing. N95_THROTTLE=1 leaves Windows' choice.     */
+typedef BOOL (WINAPI *wd_setinfo_fn)(HANDLE, int, LPVOID, DWORD);
+__attribute__((constructor)) static void wd_no_throttle(void)
+{
+    struct { ULONG Version, ControlMask, StateMask; } state;   /* PROCESS_POWER_THROTTLING_STATE */
+    const char   *e = getenv("N95_THROTTLE");
+    HMODULE       k = GetModuleHandleA("kernel32.dll");
+    wd_setinfo_fn set = k ? (wd_setinfo_fn) (void (*)(void)) GetProcAddress(k, "SetProcessInformation") : NULL;
+    if (set == NULL || (e != NULL && e[0] == '1')) return;
+    state.Version = 1;          /* PROCESS_POWER_THROTTLING_CURRENT_VERSION */
+    state.ControlMask = 0x1;    /* PROCESS_POWER_THROTTLING_EXECUTION_SPEED */
+    state.StateMask = 0;        /* not throttled */
+    set(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &state, sizeof(state));
+}
+#endif
+
 static void wd_fire(void)
 {
     char msg[1600];

@@ -310,6 +310,15 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
         "-O2;-fautomatic;-ffp-contract=off")
   endif()
 endif()
+# mis/dlmq.f (Halo One, 2026) is the quartic doublet-lattice kernel
+# (NASTRAN SYSTEM(270)=1): INCROQ, TKERQ and their helpers, new code in
+# double precision with no COMMON and no SAVE, called from GENDP's threads
+# through INCRO. -O2 -fautomatic -ffp-contract=off; its EXP loop is
+# !GCC$ NOVECTOR, so Linux and Windows compute the same bits.
+if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/mis/dlmq.f"
+      PROPERTIES COMPILE_OPTIONS "-O2;-fautomatic;-ffp-contract=off")
+endif()
 # mis/ampk.f (Halo One, 2026) is AMP's loop on (Mach, k) pairs in core: a
 # pipeline of OpenMP tasks, each pair's GINO reads and writes chained in
 # order on one dependence and everything between them - DJH, the solve,

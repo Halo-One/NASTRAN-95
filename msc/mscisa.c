@@ -18,6 +18,25 @@
  */
 #include <stdlib.h>
 
+/*
+ * Fortran: INTEGER FUNCTION N95DLQ() - 1 when the doublet lattice is to
+ * use the quartic kernel (mis/dlmq.f: Rodden, Taylor and McIntosh 1998,
+ * what MSC and Simcenter Nastran call QUARTICDLM, NASTRAN SYSTEM(270)=1),
+ * 0 for NASA's parabolic one. N95_DLM_QUARTIC in the environment: the
+ * front end sets it to 1 when the deck asks for SYSTEM(270)=1 (and
+ * leaves a value the user set alone), and the SOL 145 driver's children
+ * inherit it. Read once, as N95ISA is.
+ */
+int n95dlq_(void)
+{
+    static volatile int q = -1;
+    if (q < 0) {
+        const char *e = getenv("N95_DLM_QUARTIC");
+        q = (e != NULL && e[0] == '1') ? 1 : 0;
+    }
+    return q;
+}
+
 int n95isa_(void)
 {
     static volatile int level = -1;

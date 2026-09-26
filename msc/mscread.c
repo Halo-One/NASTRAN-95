@@ -110,6 +110,49 @@ int msc_blank(const msc_card *c, int i)
     return msc_f(c, i)[0] == '\0';
 }
 
+/* HALO: a NASTRAN statement's system cells that change the solution. Of
+ * them only SYSTEM(270) (QUARTICDLM), the doublet-lattice kernel, is
+ * honoured: 1 is the quartic kernel of Rodden, Taylor and McIntosh 1998,
+ * 0 the parabolic one NASA's code has (mis/dlmq.f). It reaches the solver
+ * as N95_DLM_QUARTIC in the environment - inherited by the SOL 145
+ * driver's children - unless the user has set that variable, which then
+ * wins. Every other NASTRAN statement is dropped, as it always was. */
+static void nastran_statement(const char *up)
+{
+    const char *p = strstr(up, "SYSTEM(270)");
+    size_t skip = 11;
+    int v;
+    const char *had;
+    char value[2];
+    if (p == NULL) { p = strstr(up, "QUARTICDLM"); skip = 10; }
+    if (p == NULL) return;
+    p += skip;
+    while (*p == ' ' || *p == '\t' || *p == '=') p++;
+    if (!isdigit((unsigned char) *p)) return;
+    v = atoi(p) != 0;
+    had = getenv("N95_DLM_QUARTIC");
+    if (had != NULL && had[0] != '\0') {
+        msc_msg(MSC_INFO, 9470, "NASTRAN SYSTEM(270)=%d in the deck; N95_DLM_QUARTIC=%s in the "
+                "environment wins: the %s doublet-lattice kernel.", v, had,
+                had[0] == '1' ? "quartic" : "parabolic");
+        return;
+    }
+    value[0] = v ? '1' : '0';
+    value[1] = '\0';
+#ifdef _WIN32
+    {
+        char buf[40];
+        snprintf(buf, sizeof buf, "N95_DLM_QUARTIC=%s", value);
+        _putenv(buf);
+    }
+#else
+    setenv("N95_DLM_QUARTIC", value, 1);
+#endif
+    msc_msg(MSC_INFO, 9470, "NASTRAN SYSTEM(270)=%d: the %s doublet-lattice kernel%s.", v,
+            v ? "quartic" : "parabolic",
+            v ? " (Rodden, Taylor and McIntosh 1998, with Desmarais' kernel integrals)" : "");
+}
+
 /* NASTRAN reals: 1.-3 and 1.5+8 are 1.0e-3 and 1.5e8. strtod does not
  * read those, so the exponent is put back before it is called.        */
 double msc_fd(const msc_card *c, int i, double dflt)
@@ -391,6 +434,7 @@ static int handle_line(msc_rdr *r, char *line, int lineno, const char *file)
 
     if (r->sec == SEC_EXEC) {
         if (strncmp(up, "CEND", 4) == 0) { r->sec = SEC_CASE; return 0; }
+        if (strncmp(up, "NASTRAN", 7) == 0) nastran_statement(up);
         if (strncmp(up, "SOL", 3) == 0 && (up[3] == ' ' || up[3] == '\t')) {
             const char *p = up + 3;
             while (*p == ' ' || *p == '\t' || *p == '=') p++;

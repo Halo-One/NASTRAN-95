@@ -1111,6 +1111,75 @@ entries evicted from the page cache first, `posix_fadvise` DONTNEED) the hit run
 20.2 s against 19.6 s warm: the NVMe reads 3.4 GB/s, and the five children read their
 Machs' entries side by side.
 
+### The quartic doublet-lattice kernel (NASTRAN SYSTEM(270)=1)
+
+Branch `halo-ase-sol145-perf` (2026-09-26). Every deck VehicleDesign writes opens with
+`NASTRAN SYSTEM(270)=1`, which MSC and Simcenter Nastran read as QUARTICDLM: "the new
+quartic formulation of the doublet lattice kernel (N5KQ)". NASTRAN-95 has only the 1971
+parabolic kernel, and the front end dropped the line: on the benchmark HALE wing (Patil,
+Hodges and Cesnik) that alone put nastran95ase's flutter 3 % below Simcenter's (30.62
+against 31.57 m/s), with both codes agreeing to five digits once Simcenter was also run
+parabolic. The quartic formulation is Rodden, Taylor and McIntosh, "Further Refinement of
+the Subsonic Doublet-Lattice Method", J. Aircraft 35(5), 720-727, 1998: the numerators of
+the incremental oscillatory kernels (planar P1, nonplanar P2) are fitted across the
+sending box's doublet line by a quartic through five points (-e, -e/2, 0, e/2, e) instead
+of a parabola through three, the closed-form integrals extended to match, and the kernel
+integrals I1, I2 approximated with Desmarais' 12 exponential terms instead of Laschka's 11.
+Both parts are needed: that is what reproduces Simcenter.
+
+* `mis/dlmq.f` (new): `INCROQ` - INCRO's arguments and result for a batch of reduced
+  frequencies - and `TKERQ` - TKER's incremental kernels for a batch, with the series
+  chosen (Laschka or Desmarais) - plus the fit `DLMQFT` (the paper's eqs. 15-19, 28-32)
+  and the nonplanar integral `DLMQNP` (eqs. 33, 34). Double precision throughout, no
+  COMMON and no SAVE (it runs in GENDP's and GENDK's threads), the geometry, the
+  regime, the logarithm and the arctangent once per element for the whole batch, the
+  series' exponentials as products of one EXP, `!GCC$ NOVECTOR` on its loops (no libmvec:
+  Linux and Windows compute the same bits). The closed forms are those DLR's PanelAero
+  writes (BSD-3, validated there against MSC's quartic), checked here against
+  high-precision quadrature (mpmath): exact to 1e-13 where the paper's forms are exact and
+  1e-4 where its series stands in. One change: in the coplanar limit (|zeta|/e <= 0.001)
+  the nonplanar term takes the series alpha of eq. 25, which the quadrature bears out;
+  PanelAero's value there (2e/(eta^2-e^2)) is not, and NASA's IDF2 uses a third,
+  (2e^2/(eta^2-e^2))^2. It matters little: that numerator carries zeta and is near zero.
+* `INCRO` and AMGK's `INCROK` hand over to INCROQ when `N95DLQ()` (msc/mscisa.c) is 1,
+  which is `N95_DLM_QUARTIC=1` in the environment. The front end (`msc/mscread.c`) sets it
+  when the deck's NASTRAN statement says `SYSTEM(270)=1` or `QUARTICDLM=1` (UIM 9470 in
+  the translation log says which kernel ran) and leaves a value the user set alone, so
+  `N95_DLM_QUARTIC=0` forces NASA's kernel on any deck. The SOL 145 driver's children
+  inherit it. The aerodynamic cache's AJJ key carries the kernel (`IAECV` 1 parabolic, 3
+  quartic), so the two never share an entry.
+
+Checked:
+
+| case | nastran95ase quartic | Simcenter 2606 quartic | parabolic (both) |
+|---|---|---|---|
+| HALE wing: flutter, frequency, divergence | 31.5679 m/s, 3.7329 Hz, 39.8809 m/s | 31.5679, 3.7329, 39.8810 | 30.6187 / 30.6188, 3.8225, 39.8805 / 39.8806 |
+| Goland wing: flutter, frequency | 155.2405 m/s, 10.9352 Hz | 155.2401, 10.9352 | 154.4496 / 154.4491, 10.9729 |
+
+(Simcenter from WIN's benchmark records on testinglaptop2.) TKERQ against PanelAero's
+kernel at 3,000 random geometries: 1.6e-7 (P1), 9.5e-6 (P2); INCROQ against a Python
+element built from PanelAero's kernel and the checked closed forms: 1.1e-4 (single
+precision output). With the Laschka series TKERQ reproduces NASA's TKER to its single
+precision. The committed monarch deck with `N95_DLM_QUARTIC=0` prints what 1d8307a's
+executable prints, 0 of 10,070,885 lines differing; NASA's 132 demos (no SYSTEM(270))
+print as before - d10011a once took 40 triangular decompositions instead of 39 under a
+16-job load and 39 in six single runs of each build: the unmodified solver's run-to-run
+variation, as d07021a/d07022a show.
+
+**NASA's parabolic kernel puts one arctangent in the wrong quadrant.** IDF1 and IDF2 take
+`ATAN(2e|zeta|/(r^2-e^2))` (Rodden 1971); for a receiving point off the sending box's plane
+(|zeta|/e > 0.001) and within r < e of its centre the denominator is negative and the
+angle belongs in the second quadrant (Rodden 1972's correction, which MSC and PanelAero
+have). At 199 of the 3,000 random geometries NASA's element differs from the exact
+integral by order one. A tail box lined up spanwise with a wing box a little above or
+below it is that case. Not changed here (the parabolic path stays NASA's to the bit); the
+quartic path has the quadrant right.
+
+Cost, the committed five-Mach monarch deck, 32 threads: parabolic 50 s wall (AMG 110 CPU
+s); quartic 68 s (AMG 615 CPU s: five kernel evaluations in double precision against
+TKERV's three in single precision, vectorised eight wide). With `N95_AERO_CACHE` the
+kernel is paid once per aerodynamic model.
+
 ### What is still serial
 
 FA1 is now seven tenths of the CPU and nearly all of it NASA's 240-square QR (HSBG +

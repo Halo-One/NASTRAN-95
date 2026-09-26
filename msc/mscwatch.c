@@ -32,6 +32,8 @@
 #else
 #include <pthread.h>
 #include <unistd.h>
+#include <time.h>
+#include <errno.h>
 #define WD_WRITE write
 #endif
 
@@ -90,8 +92,16 @@ static DWORD WINAPI wd_thread(LPVOID p)
 #else
 static void *wd_thread(void *p)
 {
+    /* HALO: nanosleep on whole seconds, restarted after a signal. The
+     * usleep this replaces takes a 32-bit useconds_t, so any limit over
+     * 71.58 minutes wrapped: N95_TIMEOUT=300 fired after 820 s, and the
+     * benchmark runner's 14400 after 712 s (2026-09-26). */
+    struct timespec left;
+    double s = wd_minutes * 60.0;
     (void)p;
-    usleep((useconds_t)(wd_minutes * 60.0e6));
+    left.tv_sec = (time_t)s;
+    left.tv_nsec = (long)((s - (double)left.tv_sec) * 1.0e9);
+    while (nanosleep(&left, &left) != 0 && errno == EINTR) { }
     wd_fire();
     return NULL;
 }

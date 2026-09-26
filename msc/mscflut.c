@@ -370,6 +370,79 @@ static int copy_file(FILE *to, const char *path)
     return 0;
 }
 
+/* HALO: the file in a child's directory where it writes the exact path of
+ * the scratch directory it made (msc/mscwatch.c, msc_scratch_dir), for the
+ * driver to remove after the child has ended: a child that ended normally
+ * or on a fatal removed its own (its exit handler), and on Linux one
+ * stopped by its watchdog or a signal did too, but a SIGKILL, a crash
+ * before the handlers, and on Windows any end with the scratch files still
+ * open (the watchdog's _exit, TerminateProcess) leave it. Only that one
+ * path, never a pattern; nothing when N95_KEEP_SCRATCH=1. The note goes
+ * once it has been read, so a finished run's directories hold what they
+ * always did.                                                          */
+#define FLUT_SCRATCH_NOTE "n95_scratch.txt"
+
+static void flut_clean_child(const char *child_dir)
+{
+    char  note[MSC_PATHLEN], path[MSC_PATHLEN];
+    FILE *f;
+    snprintf(note, sizeof(note), "%s" FLUT_SEP "%s", child_dir, FLUT_SCRATCH_NOTE);
+    f = fopen(note, "r");
+    if (!f) return;
+    if (fgets(path, sizeof(path), f)) {
+        size_t l = strlen(path);
+        while (l > 0 && (path[l - 1] == '\n' || path[l - 1] == '\r')) path[--l] = '\0';
+        if (l > 0 && !msc_keep_scratch() && msc_remove_scratch(path) != 0)
+            fprintf(stderr, "nastran: could not remove the scratch directory %s\n", path);
+    }
+    fclose(f);
+    remove(note);
+}
+
+/* the note's absolute path, in the child's environment (the child may
+ * work in another directory); Windows' _putenv copies the string, POSIX
+ * setenv too                                                           */
+static void flut_scratch_note(const char *dir)
+{
+    char rel[MSC_PATHLEN], abs_dir[MSC_PATHLEN], abs_note[MSC_PATHLEN + 32];
+    snprintf(rel, sizeof(rel), "%s" FLUT_SEP "%s", dir, FLUT_SCRATCH_NOTE);
+    remove(rel);                             /* an earlier run's, unread */
+    msc_abs_path(abs_dir, sizeof(abs_dir), dir);   /* the directory exists */
+    snprintf(abs_note, sizeof(abs_note), "%s" FLUT_SEP "%s", abs_dir, FLUT_SCRATCH_NOTE);
+#ifdef _WIN32
+    {
+        char buf[MSC_PATHLEN + 64];
+        snprintf(buf, sizeof(buf), "N95_SCRATCH_NOTE=%s", abs_note);
+        _putenv(buf);
+    }
+#else
+    setenv("N95_SCRATCH_NOTE", abs_note, 1);
+#endif
+}
+
+#ifdef _WIN32
+/* HALO: Ctrl-C or a console close ends the driver and, through the job
+ * object, every child with it - TerminateProcess, which runs nothing, so
+ * the children's scratch would stay. The driver's handler ends the job
+ * itself first, waits for the children (a directory with a file still
+ * open cannot be removed on Windows), removes their scratch, and then
+ * lets Windows end the driver as before (FALSE: the next handler).     */
+static flut_proc *flut_ctrl_proc;
+static char     (*flut_ctrl_dir)[32];
+static int        flut_ctrl_n;
+static BOOL WINAPI flut_ctrl(DWORD type)
+{
+    int k;
+    (void) type;
+    if (flut_job() != NULL) TerminateJobObject(flut_job(), 3);
+    for (k = 0; k < flut_ctrl_n; k++) {
+        if (flut_ctrl_proc[k] != FLUT_NOPROC) WaitForSingleObject(flut_ctrl_proc[k], 10000);
+        flut_clean_child(flut_ctrl_dir[k]);
+    }
+    return FALSE;
+}
+#endif
+
 /* translate subcase k into its own COSMIC deck, in its own directory, and
  * start the child that solves it there; the child, or FLUT_NOPROC      */
 static flut_proc start_child(const char *full, const char *exe, const char *dir,
@@ -382,6 +455,7 @@ static flut_proc start_child(const char *full, const char *exe, const char *dir,
     flut_proc proc;
 
     msc_mkdir(dir);
+    flut_scratch_note(dir);
     snprintf(deck, sizeof(deck), "%s" FLUT_SEP "%s.dat", dir, child_stem);
     if (msc_read(full, &d)) return FLUT_NOPROC;
     find_subcases(&d, at, FLUT_MAXSUB);
@@ -601,6 +675,12 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
 
     /* the children, jobs at a time, each translated as it starts */
     flut_setenv("N95_CHILD", "1");
+#ifdef _WIN32
+    flut_ctrl_proc = hproc;
+    flut_ctrl_dir  = child_dir;
+    flut_ctrl_n    = n;
+    SetConsoleCtrlHandler(flut_ctrl, TRUE);
+#endif
     while (done < n) {
         int ec = 0;
 
@@ -619,9 +699,13 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
          * negative as an int: a fatal all the same                      */
         code[k] = ec < 0 ? 3 : ec;
         done++;
+        flut_clean_child(child_dir[k]);   /* whatever it left of its scratch */
         fprintf(stderr, "nastran: subcase %d -> %s" FLUT_SEP "%s.out (exit code %d)\n",
                 id[k], child_dir[k], child_stem[k], code[k]);
     }
+#ifdef _WIN32
+    SetConsoleCtrlHandler(flut_ctrl, FALSE);
+#endif
 
     /* the joined print file, and the verdict */
     {

@@ -423,6 +423,10 @@ C HALO:   appended; say so rather than truncate silently
       WRITE (0,'(A,A)') '  ', DIRTRY
       CALL EXIT ( 1 )
 62    CONTINUE
+C HALO: the scratch directory to the watchdog and the signal handlers,
+C HALO:   which remove it on the ways out the exit handler does not see
+C HALO:   (msc/mscwatch.c; N95_KEEP_SCRATCH=1 keeps it)
+      CALL HMSCSD ( DIRTRY, HDIRMK )
 C HALO: the rigid format library. RFDIR from the environment wins, for
 C HALO:   anyone working on the DMAP; otherwise the copy built into this
 C HALO:   executable is written into the scratch directory and read from

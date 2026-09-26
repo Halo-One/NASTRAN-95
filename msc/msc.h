@@ -76,6 +76,9 @@ void msc_msg_summary(void);
 void msc_tally(const char *kind, const char *name);
 void msc_tally_print(void);
 int  msc_watchdog(double minutes, const char *note);   /* msc/mscwatch.c */
+void msc_scratch_dir(const char *dir, int made);       /* msc/mscwatch.c */
+int  msc_remove_scratch(const char *dir);             /* msc/mscwatch.c */
+int  msc_keep_scratch(void);                          /* msc/mscwatch.c */
 
 /* ------------------------------------------------------------------ */
 /* reading (mscread.c) */

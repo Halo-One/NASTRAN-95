@@ -172,3 +172,22 @@ C HALO:   see msc/mscwatch.c for why a thread and why _exit.
      &               NOTE(1:LEN_TRIM(NOTE)) // C_NULL_CHAR )
       RETURN
       END
+C HALO: the scratch directory, and whether this run made it, for the
+C HALO:   watchdog and the signal handlers to remove on the ways out the
+C HALO:   exit handler does not see (msc/mscwatch.c, msc_scratch_dir).
+      SUBROUTINE HMSCSD ( DIR, MADE )
+      USE ISO_C_BINDING
+      IMPLICIT NONE
+      INTERFACE
+         SUBROUTINE CMSCSD ( D, M ) BIND(C, NAME='msc_scratch_dir')
+         IMPORT :: C_INT, C_CHAR
+         CHARACTER(KIND=C_CHAR), DIMENSION(*), INTENT(IN) :: D
+         INTEGER(C_INT), VALUE :: M
+         END SUBROUTINE
+      END INTERFACE
+      CHARACTER*(*)   DIR
+      INTEGER         MADE
+      CALL CMSCSD ( DIR(1:LEN_TRIM(DIR)) // C_NULL_CHAR,
+     &              INT ( MADE, C_INT ) )
+      RETURN
+      END

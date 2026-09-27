@@ -5,7 +5,13 @@
         COMMON / UNPAKX / ITYPOT, IROBGN, LASROW, INCR                          
         INTEGER           FILE                                                  
         REAL              A(4), IBASE                                           
-        DATA              LARGE / 65536 /                                       
+C HALO: LARGE IS THE LAST ROW OF THE FIRST-TO-LAST MODE (IROBGN OR              
+C HALO: LASROW NOT GIVEN, AS MPYAD METHOD 10 READS EACH COLUMN OF "A").         
+C HALO: NASA HAD 65536, SO A STRING STARTING PAST ROW 65536 ENDED THE           
+C HALO: COLUMN THERE, SILENTLY: A TALLER COLUMN LOST THE REST. THE SOL          
+C HALO: 146 GUST MATRIX INTERPOLATED IN ADRI (BOXES X MODES ROWS, 130,074       
+C HALO: ON THE MONARCH) CAME OUT ZERO, AND SO DID THE GUST LOADS.               
+        DATA              LARGE / 1073741824 /                                  
         NAME = FILE                                                             
         NUM    = NWRDEL( IABS( ITYPOT ) )                                       
         CALL DSIPK1( IBLKD, ITYPOT )                                            

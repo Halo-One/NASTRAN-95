@@ -1281,3 +1281,45 @@ serial -O0 before AMG, and with five children in it at once most of the machine
 waits. Under load the Mach 0.10 child's AMP takes 11-12 s against 3.4 s alone: its
 GINO read chain is serial and shares the machine with the other children's FA1. A
 marked loop's output is OFP formatting, serial.
+
+## Tall columns: UNPACK stopped at row 65536 (the gust loads, the AEROF box loads)
+
+A NASA limit, found on 2026-09-26 and fixed in `mds/unpack.f`. It is in NASA's 1995
+source and in Jon's `halo-ase-sol145` too.
+
+**The limit.** `UNPACK` has a first-to-last mode, used when the caller leaves the row
+range to the column (`IROBGN` or `LASROW` not positive): it returns the column from
+its first non-zero to its last. NASA ended that mode at `LARGE = 65536`. A string
+starting past row 65536 closed the column, silently. MPYAD's method 10 (`MMA1`)
+reads every column of "A" this way, so a product whose "A" is taller than 65,536 rows
+lost everything below that row.
+
+**What it did here.**
+- *The SOL 146 gust loads came out zero.* `ADRI` interpolates the gust matrix QHJL
+  over reduced frequency with MINTRP, as one column per k of boxes x modes rows. On the
+  monarch that is 2,282 x 57 = 130,074 rows. The interpolated QHJK summed to 2.5e-6
+  where its input summed to 7,174, so the gust loads were zero. A 1-cos run answered
+  only its dummy `DAREA` (1 N at the reference grid): doubling `WG` changed nothing.
+  - With the fix, the committed deck `monarch_demo_asm1083_gust1cos_h0km_eas8p5`
+    matches Simcenter Nastran 2606's print of the same deck. Tip height above grid
+    1010001 is -94.9 mm at 2.28 s, against Simcenter's -94.2 mm at 2.26 s. The
+    extremes are within 0.8 % and 1.7 %, and the correlation over the 6 s is 0.9996.
+    The plunge ranges over -8.13..8.07 m, against -8.12..8.07 m.
+  - Before the fix the tip moved -2.3 mm.
+- *The AEROF box loads of a flutter run came out zero.* `ADR` interpolates QKHL (k-set
+  x modes rows: 4,564 x 57 on the monarch) the same way. Its "AERODYNAMIC LOADS (UNIT
+  DYNAMIC PRESSURE)" tables printed about 1e-19 on every box; they now print the loads
+  (4.3e-4 on box 7101000, first vector). Nothing else in the flutter print moves. The
+  committed five-Mach monarch deck prints the same 6,764,231 lines outside those pages,
+  so every root and crossing is as before.
+- *What else could have been hit:* any "A" matrix of MPYAD method 10, and any other
+  first-to-last `UNPACK`, with more than 65,536 rows. That means a model past about
+  10,900 grids (65,536 g-set rows), or a flattened matrix of that height. The repo's
+  models stop at 5,387 grids.
+
+**Checked:**
+- NASA's 132 demos print as before;
+- the five-Mach flutter deck is identical outside the aero-load pages;
+- the gust deck is against Simcenter as above.
+
+The fix sets `LARGE` to 2**30, taller than any column.

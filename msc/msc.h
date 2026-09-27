@@ -26,7 +26,10 @@
 /* ------------------------------------------------------------------ */
 /* limits. Generous, checked, and reported when hit -- a deck that runs
  * into one gets a message naming the limit, never a truncated model.  */
-#define MSC_MAXFLD   256   /* fields on one logical card (continuations) */
+#define MSC_MAXFLD   1048576  /* fields on one logical card (continuations). It was
+                               * 256, and card_add dropped the rest silently: a
+                               * turbulence deck's TABLED1 (501 points) lost its
+                               * ENDT, UFM 316 in IFP. The fields grow as needed */
 #define MSC_FLDLEN    17   /* one field: large field is 16 characters    */
 #define MSC_LINELEN 1024   /* one input line                             */
 #define MSC_PATHLEN 1024

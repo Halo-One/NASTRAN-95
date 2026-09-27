@@ -2,6 +2,7 @@
      1                 NCOL,NOGO)
 C
       INTEGER         QHHL,SCR1,SCR2,SCR3,SCR4,TRL(7),OUT
+      INTEGER         MINTDQ
       DIMENSION       FL(1),MCB(7),NAME(2)
       CHARACTER       UFM*23
       COMMON /XMSSG / UFM
@@ -117,8 +118,11 @@ C
       CALL DMPFIL (-SCR1,FL(ICP),NC)
       IM   = 0
       IK   = 1
+C HALO: THE SPLINE IN K SOLVED IN DOUBLE PRECISION (MIS/LSPLND.F)
+      IDQ  = MINTDQ(1)
       CALL MINTRP (NI,FL(IPI),NFREQ,FL(IPD),-1,IM,IK,0.0,SCR1,SCR2,
      1             SCR3,SCR4,FL(ICP),NC,NOGO,IPREC)
+      IDQ  = MINTDQ(0)
       IF (NOGO .EQ. 1) GO TO 200
       CALL DMPFIL (-SCR2,FL(ICP),NC)
       RETURN

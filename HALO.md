@@ -1323,3 +1323,66 @@ lost everything below that row.
 - the gust deck is against Simcenter as above.
 
 The fix sets `LARGE` to 2**30, taller than any column.
+
+## SOL 146 random response: the PSD decks run, and the k interpolation is solved in double precision
+
+Found on 2026-09-27 on the monarch's von Karman PSD deck
+(`monarch_demo_asm1083_gust_h0km_eas8p5`), after the UNPACK fix above had made its gust
+loads non-zero. Three faults, two of them NASA's.
+
+**SDR2B read an absent SIL (d0e9419, `mis/sdr2b.f`).** AERO 11's loads-only SDR2
+(`CASECC,,,,EQDYN,,,,,PPF,... *FREQ*`) has no SIL input. SDR2B's extra-point check calls
+RDTRL on it. For a file that is not in the FIST, RDTRL only makes the name negative and
+leaves the rest of the trailer as the last call left it: SILA's, from the MMREIG SDR2
+before. With an ELFORCE or STRESS request, SDR2B then OPENed the absent file and stopped
+with SFM 3001, "data set 106 not defined in the FIST". An absent SIL now means no extra
+points to convert. Every run that got past this point before is unchanged.
+
+**The case control kept renumbered ids (d0e9419, `msc/mscexec.c`, `mscxlat.c`,
+`mscf06.c`).**
+- The front end renumbers ids over 2^24-1 in the bulk data: the aero reference grid
+  99999999 becomes 16777215.
+- The case control's SET lists and the points of its XY requests kept the old number.
+  `XYPRINT DISP PSDF / 99999999(T3)` asked RANDOM for a point that was not there: RAND2,
+  SFM 3002 ("a plot request for a point that does not exist").
+- They now follow the bulk data. A THRU range bounded by such an id cannot be followed
+  and gets UWM 9105.
+- The print puts the deck's number back on the XY curves (`CURVE ID =`, `CURVE n(c)`) and
+  on the SORT2 point headers.
+
+**The spline in k was solved in single precision (09c8681, `mis/lsplnd.f`, `mintrp.f`,
+`adri.f`, `frd2i.f`).**
+- *What it does.* ADRI interpolates the gust matrix QHJ (and ADR's QKH, for the
+  aerodynamic loads) over reduced frequency, and FRD2I interpolates QHH. Both go through
+  MINTRP, which calls LSPLIN: a cubic spline, even in k (the kernel plus its image in
+  k = 0), with one constant term.
+- *Why it failed.* LSPLIN solves its system by INVERS in single precision. The monarch's
+  k list starts 0.005, 0.01, 0.02, and the fit being even in k puts every value next to
+  its image, so the system is ill-conditioned. The weights came out of order 1-20,
+  oscillating, and not 1 at a tabulated k (0.988 at k = 0.0357, which is a node).
+- *What it did.*
+  - Rows of QHJ whose imaginary part bends at low k (boxes far aft) came out up to 70 %
+    off at the tabulated k themselves.
+  - The gust response was jagged from one frequency to the next above 1.5 Hz. Against
+    Simcenter 2606, displacements agreed but accelerations and forces were 3-24 % off in
+    rms and N0 up to 48 % off.
+  - QHH is smoother in k, so the point-force response through QHH alone was within 0.3 %.
+- *The fix.* LSPLND solves the same system (the same kernel, constant term and weights)
+  by Gaussian elimination with partial pivoting in double precision. It applies to
+  LSPLIN's case here: KY = 1, KD = 0, KT = 1, no slopes, every x zero. ADRI and FRD2I
+  switch it on (MINTDQ) around their MINTRP call; FA1K's K method keeps LSPLIN.
+- *Results against Simcenter 2606:*
+  - PSD deck: every curve's rms within 0.3 % (the root bar's item 3 2.6 %) and N0
+    within 3.5 %. The tip transfer function is within 0.3 % to 2.7 Hz. Near the 4.3 Hz
+    mode pair it is within 9 % and 10°; Simcenter adds its default residual vector,
+    nastran95ase none.
+  - 1-cos deck: the tip extremes are within 0.05 % (they were 0.8-1.7 %).
+  - An MKAERO list holding every analysis k exactly now gives the interpolated run's
+    answers.
+
+**Checked against a262158:**
+- The five-Mach flutter deck is identical outside the AERODYNAMIC LOADS pages
+  (6,764,231 lines); only ADR's interpolation moves those pages.
+- Of NASA's 132 demos, only d11031a and d11032a (AERO 11) move: below 1.4e-4 of the
+  largest number on a line, but for one near-zero entry and a tie in the X of an XY
+  maximum.

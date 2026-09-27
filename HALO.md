@@ -1386,3 +1386,14 @@ points to convert. Every run that got past this point before is unchanged.
 - Of NASA's 132 demos, only d11031a and d11032a (AERO 11) move: below 1.4e-4 of the
   largest number on a line, but for one near-zero entry and a tie in the X of an XY
   maximum.
+
+## Long cards: the front end dropped fields past 256
+
+Fixed in `msc/msc.h`. `card_add` stopped taking fields at 256 (`MSC_MAXFLD`) and
+returned silently, so a longer card was truncated.
+- The monarch turbulence time-history decks carry their gust as a TABLED1 of 501
+  points. It lost the rest of its points and its ENDT, and IFP stopped with UFM 316.
+- The fields grow as needed, so the cap is now 1,048,576.
+- `monarch_demo_asm1083_gustvk_h0km_eas8p5_s1` now runs to the end and matches
+  Simcenter 2606: tip rms within 0.04 %, extremes within 0.3 %, correlation 0.999994.
+- The flutter, 1-cos and PSD decks print as before.

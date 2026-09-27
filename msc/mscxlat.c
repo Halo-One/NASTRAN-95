@@ -1632,6 +1632,13 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
         }
     }
     one_aero_subcase(d, rf);
+    {
+        /* the case control's SET lists and XY points follow the ids */
+        int iter = 0, old, new_id;
+        msc_case_remap_clear();
+        while (msc_map_next(&x.remap, &iter, &old, &new_id))
+            msc_case_remap(old, new_id);
+    }
     msc_case_write(fp, d, &spc_sel, &method_sel, st->autospc > 0, 0);
     fprintf(fp, "BEGIN BULK\n");
 

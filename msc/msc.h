@@ -187,6 +187,8 @@ int  msc_sol_lookup(int sol, const char *name, const char **app, int *rf,
 void msc_case_write(FILE *fp, msc_deck *d, int *spc_sel, int *method_sel,
                     int suppress_spc, int suppress_title);
 int  msc_case_has_output(msc_deck *d);
+void msc_case_remap_clear(void);
+void msc_case_remap(int old_id, int new_id);
 int  msc_case_find(msc_deck *d, const char *want, char *val_out);
 
 /* the solver's own fatal messages, explained (mscdiag.c) */

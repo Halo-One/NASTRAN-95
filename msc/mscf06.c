@@ -448,8 +448,18 @@ int msc_f06(const char *path)
         }
 
         if (f6_nremap) {
+            const char *k;
             if (in_vector) unmap_field(line, 0, 14);
             else if (has(line, "-        ")) unmap_field(line, 38, 46);
+            /* the XY output's curves (CURVE   ID = n, and CURVE n(c) in
+             * the summary) and a SORT2 table's point (POINT-ID = n): a
+             * random response's PSD of the renumbered reference grid   */
+            else if ((k = strstr(line, "CURVE   ID =")) != NULL)
+                unmap_field(line, (int) (k - line) + 12, (int) (k - line) + 21);
+            else if ((k = strstr(line, "   CURVE ")) != NULL && strchr(k, '(') != NULL)
+                unmap_field(line, (int) (k - line) + 9, (int) (strchr(k, '(') - line));
+            else if ((k = strstr(line, "POINT-ID =")) != NULL)
+                unmap_field(line, (int) (k - line) + 10, (int) (k - line) + 19);
         }
         put(&b, line);
     }

@@ -337,6 +337,17 @@ void msc_case_write(FILE *fp, msc_deck *d, int *spc_sel, int *method_sel,
          * force (SUPORT1 became SUPORT)                                 */
         if (aet_g.active) {
             if (msc_streq(name, "TRIM")) continue;
+            /* HALO: the DIVERG set of each subcase was read already too;
+             * AETRIM finds the divergence roots itself (all of them, on
+             * the splined set), so CMETHOD's EIGC has no part           */
+            if (msc_streq(name, "DIVERG")) continue;
+            if (msc_streq(name, "CMETHOD")) {
+                msc_msg(MSC_INFO, 9679,
+                    "case control CMETHOD = %s: SOL 144's divergence roots are found\n"
+                    "by AETRIM on the splined set (every root, LAPACK DGEEV), not by\n"
+                    "a complex eigensolver; the EIGC is not used.", val);
+                continue;
+            }
             /* the box pressures and forces at trim: AETRIM prints them   */
             if (msc_streq(name, "APRES") || msc_streq(name, "APRESSURE")) {
                 aet_g.want_apres = !msc_streq(val, "NONE");

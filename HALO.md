@@ -1456,6 +1456,61 @@ COEFFICIENTS, per AESURF, its CREFC/CREFS) agree with Simcenter's within 4e-6 (r
 Machs get one AIC each (AMG's SKJ comes once per Mach-k pair; the first block serves).
 
 Not there yet: monitor points, TRIM2, AEPARM/AEDW/AEFORCE/AEPRESS,
-applied loads in a trim subcase (LOAD = n is a fatal), half models (SYMXZ), ACSID != 0,
-cylindrical/spherical displacement systems, divergence (DIVERG), and SOL 144 on the
-Windows build (the source is the same; it has not been built or run there).
+applied loads in a trim subcase (LOAD = n is a fatal), ground effect (SYMXY),
+cylindrical/spherical displacement systems, bodies (CAERO2) and the other
+aerodynamic theories, and SOL 144 on the Windows build (the source is the same; it has
+not been built or run there).
+
+### SOL 144: the correction matrices, divergence, half models
+
+Branch `halo-ase-sol144-corrections` (from `halo-ase-sol144`). What MSC does with
+each, with the citations, and the validation tables are in
+[`SOL144.md`](SOL144.md), "The correction matrices (W2GJ, FA2J, WKK) and divergence
+(DIVERG)"; in short:
+
+- **W2GJ, FA2J, WKK** by their restricted names, as DMI (j or k-set positions, MSC's
+  order: boxes by ascending id) or DMIJ / DMIK (box ids and components), DMI winning
+  as in MSC; WTFACT serves when there is no WKK. The front end (`msc/msctrim.c`) takes
+  them out of the bulk data like the other trim cards. AETRIM applies them as MSC's
+  2-104..2-108: W2GJ is one more column of D_jx (the intercept, fixed at 1, printed as
+  the REF. COEFF. row and the hinge moments' AT REFERENCE row, and on the right hand
+  side of the trim); WKK multiplies every box force and moment of the theory; FA2J's
+  q S FA2J joins the intercept's forces unweighted.
+- **DIVERG** (case control and bulk data): per Mach, the restrained eigenproblem
+  [K_ll - q Q_ll] u = 0 reduced exactly to the splined set, (C_ss Q_ss) u_s = (1/q) u_s,
+  every root by LAPACK DGEEV; printed as MSC's COMPLEX EIGENVALUE SUMMARY (p, q =
+  -p^2) and DIVERGENCE SUMMARY. CMETHOD and EIGC are read and not used. A subcase may
+  have DIVERG alone or with TRIM.
+- **Half models and fewer SUPORT dofs**: AEROS SYMXZ = +1 / -1 (COSMIC's doublet
+  lattice has the images); SUPORT on 0 to 6 dofs. The DMAP program now runs without
+  SUPORT too (KLL = KAA, the r-set blocks purged, as DISP 1 does), and calls SSG2 for
+  the s-set loads and reactions SDR1 needs once a model has SPCs (it stopped in MERGE,
+  SFM 3007). The g-set rigid body modes of a model on fewer than six dofs are the
+  geometric ones fitted to the structure's DM (pseudo-inverse, so a motion the a set
+  cannot see stays out). A model with no SUPORT has no equilibrium equations and no
+  unrestrained columns (N/A); its forces are summed through the g-set spline.
+- **ACSID** any rectangular system: the boxes (in ACPT, in the aerodynamic frame) are
+  taken to basic for the downwash, the unsplined sums and the hinge moments.
+- **SIDES** is the sideslip angle, a rotation about V_hat x y_ref (+z_ref in the repo's
+  z-up frames, unchanged; -z_ref in MSC's NACA axes) - example HA144D settles it.
+- **Front end, outside SOL 144** (`msc/mscxlat.c`): AEFACT and GENEL are copied (MSC's
+  examples use both), and the auto-SPC counts GENEL, MPC and SUPORT dofs as held (it
+  SPC'd a GENEL-only or MPC-dependent dof: UFM 2101A). No deck of the repo has any of
+  the three as a card of its own.
+
+**Validated against the guide's own examples** (the decks rebuilt from the printed
+echoes): HA144A (W2GJ/WKK/FA2J, half model) within 8.2e-7 of each variable's largest
+coefficient in all six columns, trims to 7 digits, box pressures and forces within
+1e-6; HA144B (antisymmetric, SUPORT 1 dof, ACSID rotated) within 5e-6, displacements
+to every printed digit; its DIVERG run (listing 5-1) to 6-7 digits on every root once
+the AEROS is symmetric - with the deck's antisymmetric AEROS the roots are 15 % higher,
+so the published listing was run symmetric; HA144C (DMIJ W2GJ, no SUPORT) rigid
+columns within 4e-8 (elastic 3-10 % off: the bevelled CQUAD4 plate becomes a uniform
+CQUAD2); HA144D within 1.1e-6 (it found SIDES's sign); HA144E (5 subcases) within
+1.1e-6, trims to 6-7 digits. Synthetic: W2GJ = 0.01 on the horizontal boxes moves
+ANGLEA by exactly -0.01 and nothing else; WKK = 2 I at q is the plain deck at 2q (trims
+and displacements identical, coefficients twice); FA2J's intercept closes the trim
+balance; a typical section's divergence is K / (S c CMY_alpha) to 7 digits.
+Unchanged: the monarch trim deck's tables, trims and displacements (only fixed trim
+variables now print their exact TRIM value instead of the solve's 1e-20 roundoff, and
+OLOAD rotations of 1e-26 print 0.0), and the small trim test deck likewise.

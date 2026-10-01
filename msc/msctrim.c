@@ -45,8 +45,12 @@ static void free_model(void)
     for (i = 0; i < aet_g.nlist; i++) free(aet_g.list[i].ids);
     for (i = 0; i < aet_g.nlink; i++) { free(aet_g.link[i].ind); free(aet_g.link[i].c); }
     for (i = 0; i < aet_g.ntrim; i++) { free(aet_g.trim[i].lab); free(aet_g.trim[i].ux); }
+    for (i = 0; i < aet_g.ndiv; i++) free(aet_g.div[i].m);
     free(aet_g.stat); free(aet_g.surf); free(aet_g.list); free(aet_g.link);
     free(aet_g.trim); free(aet_g.sub_id); free(aet_g.sub_trim); free(aet_g.mach);
+    free(aet_g.sub_div); free(aet_g.div);
+    free(aet_g.w2gj.e); free(aet_g.fa2j.e); free(aet_g.wkk.e); free(aet_g.wtf.e);
+    free(aet_g.w2gj_j.e); free(aet_g.fa2j_j.e); free(aet_g.wkk_k.e); free(aet_g.wtf_k.e);
 }
 
 void aet_reset(void)
@@ -152,6 +156,166 @@ static int take_trim(const msc_card *c)
     return 1;
 }
 
+/* ------------------------------------------------------------------ */
+/* the correction matrices: DMI, DMIJ and DMIK by their restricted names */
+
+/* a field that is an integer (a row number), not a real (a value)     */
+static int fld_is_int(const char *f)
+{
+    const char *p = f;
+    if (*p == '+' || *p == '-') p++;
+    if (!*p) return 0;
+    for (; *p; p++) if (!isdigit((unsigned char) *p)) return 0;
+    return 1;
+}
+
+static void dmi_add(aet_dmi *M, int ri, int rc, int ci, int cc, double v)
+{
+    aet_mel *e;
+    if (M->ne == M->cap) {
+        M->cap = M->cap ? 2 * M->cap : 64;
+        M->e = (aet_mel *) msc_realloc(M->e, sizeof(aet_mel) * (size_t) M->cap);
+    }
+    e = &M->e[M->ne++];
+    e->ri = ri; e->rc = rc; e->ci = ci; e->cc = cc; e->v = v;
+}
+
+/* the slot of a restricted name, or NULL (the matrix goes to the
+ * solver, as any other DMI)                                           */
+static aet_dmi *dmi_slot(const char *card, const char *name)
+{
+    int j = msc_streq(card, "DMIJ"), k = msc_streq(card, "DMIK");
+    if (msc_streq(name, "W2GJ")) return k ? NULL : (j ? &aet_g.w2gj_j : &aet_g.w2gj);
+    if (msc_streq(name, "FA2J")) return k ? NULL : (j ? &aet_g.fa2j_j : &aet_g.fa2j);
+    if (msc_streq(name, "WKK"))  return j ? NULL : (k ? &aet_g.wkk_k : &aet_g.wkk);
+    if (msc_streq(name, "WTFACT")) return j ? NULL : (k ? &aet_g.wtf_k : &aet_g.wtf);
+    return NULL;
+}
+
+/* DMI NAME 0 FORM TIN TOUT - M N (header), DMI NAME J I1 A(I1,J)
+ * A(I1+1,J) ... I2 A(I2,J) ... (a column; an integer starts a new row,
+ * "THRU" n repeats the last value down to row n; blanks are skipped,
+ * QRG DMI remarks 6, 8 and 13)                                          */
+static int take_dmi(const msc_card *c, aet_dmi *M)
+{
+    char name[MSC_FLDLEN];
+    int  j, i, row = 0, have = 0;
+    double last = 0.0;
+    strncpy(name, msc_f(c, 1), sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
+    msc_upper(name);
+    if (msc_fi(c, 2, -1) == 0 && fld_is_int(msc_f(c, 2))) {
+        int tin = msc_fi(c, 4, 1);
+        if (M->kind == 2) { free(M->e); M->e = NULL; M->ne = M->cap = 0; }
+        M->kind = 1;
+        lab_copy(M->name, name);
+        M->form = msc_fi(c, 3, 2);
+        M->m = msc_fi(c, 7, 0);
+        M->n = msc_fi(c, 8, 1);
+        if (tin == 3 || tin == 4)
+            msc_msg_at(MSC_FATAL, 9671, c,
+                "DMI %s is complex (TIN %d); the static aeroelastic corrections are\n"
+                "real.", name, tin);
+        if (M->form == 3 || M->form == 8) M->n = 1;
+        return 1;
+    }
+    j = msc_fi(c, 2, 0);
+    for (i = 3; i <= c->nfld; i++) {
+        const char *f = msc_f(c, i);
+        if (!*f) continue;
+        if (msc_streq(f, "THRU")) {
+            int to = msc_fi(c, i + 1, 0), r;
+            if (!have || to < row) {
+                msc_msg_at(MSC_FATAL, 9672, c,
+                    "DMI %s column %d: THRU %s follows no value it could repeat.",
+                    name, j, msc_f(c, i + 1));
+                return 1;
+            }
+            for (r = row + 1; r <= to; r++) dmi_add(M, r, 0, j, 0, last);
+            row = to;
+            i++;
+            continue;
+        }
+        if (fld_is_int(f)) { row = atoi(f) - 1; have = 0; continue; }
+        row++;
+        last = msc_fd(c, i, 0.0);
+        have = 1;
+        dmi_add(M, row, 0, j, 0, last);
+    }
+    return 1;
+}
+
+/* DMIJ / DMIK NAME 0 IFO TIN TOUT POLAR - NCOL (header), NAME GJ CJ -
+ * G1 C1 A1 B1 G2 C2 A2 B2 ... (a column at a box and component; the rows
+ * are boxes and components too, QRG DMIJ / DMIK)                       */
+static int take_dmij(const msc_card *c, aet_dmi *M)
+{
+    char name[MSC_FLDLEN];
+    int  gj, cj, i;
+    strncpy(name, msc_f(c, 1), sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
+    msc_upper(name);
+    if (msc_fi(c, 2, -1) == 0 && fld_is_int(msc_f(c, 2))) {
+        int tin = msc_fi(c, 4, 1);
+        M->kind = 2;
+        lab_copy(M->name, name);
+        M->form = msc_fi(c, 3, 2);
+        M->m = 0;
+        M->n = msc_fi(c, 8, 1);
+        if (tin == 3 || tin == 4)
+            msc_msg_at(MSC_FATAL, 9671, c,
+                "%s %s is complex (TIN %d); the static aeroelastic corrections are\n"
+                "real.", c->name, name, tin);
+        return 1;
+    }
+    gj = msc_fi(c, 2, 0);
+    cj = msc_fi(c, 3, 0);
+    M->kind = 2;
+    for (i = 5; i + 2 <= c->nfld; i += 4) {
+        int gi = msc_fi(c, i, 0), ci = msc_fi(c, i + 1, 0);
+        if (msc_blank(c, i)) continue;
+        dmi_add(M, gi, ci, gj, cj, msc_fd(c, i + 2, 0.0));
+        if (M->form == 6 && !(gi == gj && ci == cj))
+            dmi_add(M, gj, cj, gi, ci, msc_fd(c, i + 2, 0.0));
+    }
+    return 1;
+}
+
+/* DIVERG SID NROOT M1 M2 ... (a blank Mach ends the list)              */
+static int take_diverg(const msc_card *c)
+{
+    aet_div *d;
+    int i;
+    aet_g.div = (aet_div *) msc_realloc(aet_g.div, sizeof(aet_div) * (size_t) (aet_g.ndiv + 1));
+    d = &aet_g.div[aet_g.ndiv++];
+    memset(d, 0, sizeof(*d));
+    d->sid   = msc_fi(c, 1, 0);
+    d->nroot = msc_blank(c, 2) ? 1 : msc_fi(c, 2, 1);
+    for (i = 3; i <= c->nfld; i++) {
+        if (msc_blank(c, i)) break;
+        d->m = (double *) msc_realloc(d->m, sizeof(double) * (size_t) (d->nm + 1));
+        d->m[d->nm++] = msc_fd(c, i, 0.0);
+    }
+    if (d->nm == 0)
+        msc_msg_at(MSC_FATAL, 9673, c, "DIVERG %d lists no Mach number.", d->sid);
+    return 1;
+}
+
+const aet_dmi *aet_matrix(int which)
+{
+    switch (which) {
+    case 0: return aet_g.w2gj.kind ? &aet_g.w2gj : (aet_g.w2gj_j.kind ? &aet_g.w2gj_j : NULL);
+    case 1: return aet_g.fa2j.kind ? &aet_g.fa2j : (aet_g.fa2j_j.kind ? &aet_g.fa2j_j : NULL);
+    case 2:
+        if (aet_g.wkk.kind)   return &aet_g.wkk;
+        if (aet_g.wkk_k.kind) return &aet_g.wkk_k;
+        if (aet_g.wtf.kind)   return &aet_g.wtf;
+        if (aet_g.wtf_k.kind) return &aet_g.wtf_k;
+        return NULL;
+    default: return NULL;
+    }
+}
+
 int aet_bulk_card(const msc_card *c)
 {
     const char *n = c->name;
@@ -196,6 +360,40 @@ int aet_bulk_card(const msc_card *c)
         }
         return 1;
     }
+    if (msc_streq(n, "DMI") || msc_streq(n, "DMIJ") || msc_streq(n, "DMIK")) {
+        char nm[MSC_FLDLEN];
+        aet_dmi *M;
+        strncpy(nm, msc_f(c, 1), sizeof(nm) - 1);
+        nm[sizeof(nm) - 1] = '\0';
+        msc_upper(nm);
+        M = dmi_slot(n, nm);
+        if (!M) {
+            if (msc_streq(n, "DMI")) return 0;      /* any other DMI      */
+            msc_msg_at(MSC_FATAL, 9674, c,
+                "%s %s: SOL 144 here reads %s only for %s; other matrices on\n"
+                "it (AEDW, AEPRESS, AEFORCE data) are not supported.", n, nm, n,
+                msc_streq(n, "DMIK") ? "WKK and WTFACT" : "W2GJ and FA2J");
+            return 1;
+        }
+        return msc_streq(n, "DMI") ? take_dmi(c, M) : take_dmij(c, M);
+    }
+    if (msc_streq(n, "DMIJI")) {
+        msc_msg_at(MSC_FATAL, 9674, c,
+            "DMIJI (the interference elements of CAERO2 bodies): SOL 144 here\n"
+            "takes CAERO1 panels only.");
+        return 1;
+    }
+    if (msc_streq(n, "DIVERG")) return take_diverg(c);
+    if (msc_streq(n, "EIGC")) {
+        msc_msg_at(MSC_INFO, 9679, c,
+            "SOL 144: EIGC %s is not used; AETRIM finds every divergence root\n"
+            "on the splined set (LAPACK DGEEV).", msc_f(c, 1));
+        return 1;
+    }
+    if (msc_streq(n, "SUPORT") || msc_streq(n, "SUPORT1")) {
+        aet_g.have_suport = 1;
+        return 0;                                   /* the solver's card */
+    }
     if (msc_streq(n, "AELIST")) return take_aelist(c);
     if (msc_streq(n, "AELINK")) return take_aelink(c);
     if (msc_streq(n, "TRIM"))   return take_trim(c);
@@ -232,7 +430,7 @@ int aet_bulk_card(const msc_card *c)
         return 1;
     }
     if (msc_streq(n, "AEPARM") || msc_streq(n, "AEDW") || msc_streq(n, "AEFORCE") ||
-        msc_streq(n, "AEPRESS") || msc_streq(n, "CSSCHD") || msc_streq(n, "DIVERG") ||
+        msc_streq(n, "AEPRESS") || msc_streq(n, "CSSCHD") ||
         msc_streq(n, "UXVEC") || msc_streq(n, "AECOMP") || msc_streq(n, "AECOMPL") ||
         msc_streq(n, "MONPNT1") || msc_streq(n, "MONPNT2") || msc_streq(n, "MONPNT3")) {
         if (msc_streq(n, "MONPNT1") || msc_streq(n, "MONPNT2") || msc_streq(n, "MONPNT3") ||
@@ -255,11 +453,11 @@ int aet_bulk_card(const msc_card *c)
 
 void aet_case_scan(msc_deck *d)
 {
-    int  i, global_trim = -1, cur = -1;
+    int  i, global_trim = -1, global_div = -1, cur = -1;
     char up[MSC_LINELEN];
 
-    free(aet_g.sub_id); free(aet_g.sub_trim);
-    aet_g.sub_id = NULL; aet_g.sub_trim = NULL; aet_g.nsub = 0;
+    free(aet_g.sub_id); free(aet_g.sub_trim); free(aet_g.sub_div);
+    aet_g.sub_id = NULL; aet_g.sub_trim = NULL; aet_g.sub_div = NULL; aet_g.nsub = 0;
     for (i = 0; i < d->ncase; i++) {
         char *p, *q;
         strncpy(up, d->cases[i], sizeof(up) - 1);
@@ -271,9 +469,19 @@ void aet_case_scan(msc_deck *d)
         if (strncmp(p, "SUBCASE", 7) == 0 && !isalnum((unsigned char) p[7])) {
             aet_g.sub_id = (int *) msc_realloc(aet_g.sub_id, sizeof(int) * (size_t) (aet_g.nsub + 1));
             aet_g.sub_trim = (int *) msc_realloc(aet_g.sub_trim, sizeof(int) * (size_t) (aet_g.nsub + 1));
+            aet_g.sub_div = (int *) msc_realloc(aet_g.sub_div, sizeof(int) * (size_t) (aet_g.nsub + 1));
             aet_g.sub_id[aet_g.nsub] = atoi(p + 7);
             aet_g.sub_trim[aet_g.nsub] = global_trim;
+            aet_g.sub_div[aet_g.nsub] = global_div;
             cur = aet_g.nsub++;
+            continue;
+        }
+        /* DIVERG = n: the divergence analysis of the subcase            */
+        if (strncmp(p, "DIVERG", 6) == 0 && !isalnum((unsigned char) p[6])) {
+            q = strchr(p, '=');
+            if (!q) continue;
+            if (cur < 0) global_div = atoi(q + 1);
+            else aet_g.sub_div[cur] = atoi(q + 1);
             continue;
         }
         /* applied loads: SOL 144's intercept (PZ) would carry them, and
@@ -297,8 +505,10 @@ void aet_case_scan(msc_deck *d)
     if (aet_g.nsub == 0) {
         aet_g.sub_id = (int *) msc_alloc(sizeof(int));
         aet_g.sub_trim = (int *) msc_alloc(sizeof(int));
+        aet_g.sub_div = (int *) msc_alloc(sizeof(int));
         aet_g.sub_id[0] = 1;
         aet_g.sub_trim[0] = global_trim;
+        aet_g.sub_div[0] = global_div;
         aet_g.nsub = 1;
     }
 }
@@ -323,25 +533,28 @@ int aet_check(void)
             "the aerodynamic and reference coordinate systems).");
         return 1;
     }
-    if (aet_g.acsid != 0) {
-        msc_msg(MSC_FATAL, 9611,
-            "AEROS ACSID %d: SOL 144 here takes the aerodynamic coordinate\n"
-            "system as basic (ACSID 0, the flow along basic x).", aet_g.acsid);
-        bad = 1;
-    }
-    if (aet_g.symxz != 0 || aet_g.symxy != 0) {
+    if (aet_g.symxy != 0 || aet_g.symxz < -1 || aet_g.symxz > 1) {
         msc_msg(MSC_FATAL, 9612,
-            "AEROS SYMXZ %d SYMXY %d: SOL 144 here takes full models only\n"
-            "(symmetric or antisymmetric half models are not supported yet).",
+            "AEROS SYMXZ %d SYMXY %d: SOL 144 here takes full models and half\n"
+            "models about the x-z plane (SYMXZ +1 symmetric, -1 antisymmetric);\n"
+            "the x-y plane (ground effect) is not supported.",
             aet_g.symxz, aet_g.symxy);
         bad = 1;
     }
-    if (aet_g.nstat + aet_g.nsurf == 0) {
-        msc_msg(MSC_FATAL, 9613, "SOL 144 needs trim variables: AESTAT and AESURF cards.");
-        bad = 1;
+    {
+        int ntrimsub = 0;
+        for (i = 0; i < aet_g.nsub; i++) if (aet_g.sub_trim[i] >= 0) ntrimsub++;
+        if (ntrimsub > 0 && aet_g.nstat + aet_g.nsurf == 0) {
+            msc_msg(MSC_FATAL, 9613, "SOL 144 needs trim variables: AESTAT and AESURF cards.");
+            bad = 1;
+        }
     }
     for (i = 0; i < aet_g.ntrim; i++) {
         const aet_trimc *t = &aet_g.trim[i];
+        int used = 0;
+        /* HALO (corrections): only the TRIM sets a subcase selects       */
+        for (j = 0; j < aet_g.nsub; j++) if (aet_g.sub_trim[j] == t->sid) used = 1;
+        if (!used) continue;
         if (t->mach >= 1.0) {
             msc_msg(MSC_FATAL, 9614,
                 "TRIM %d is at Mach %g: supersonic aerodynamics (ZONA51) are not\n"
@@ -374,35 +587,101 @@ int aet_check(void)
     }
     for (i = 0; i < aet_g.nsub; i++) {
         int found = 0;
-        for (j = 0; j < aet_g.ntrim; j++) if (aet_g.trim[j].sid == aet_g.sub_trim[i]) found = 1;
-        if (!found && aet_g.sub_trim[i] < 0) {
+        if (aet_g.sub_trim[i] < 0 && aet_g.sub_div[i] < 0) {
             msc_msg(MSC_FATAL, 9618,
-                "subcase %d selects no TRIM set: every SOL 144 subcase needs\n"
-                "TRIM = n naming a TRIM card of the bulk data.", aet_g.sub_id[i]);
+                "subcase %d selects no TRIM set and no DIVERG set: every SOL 144\n"
+                "subcase needs TRIM = n naming a TRIM card of the bulk data, or\n"
+                "DIVERG = n naming a DIVERG card.", aet_g.sub_id[i]);
             bad = 1;
-        } else if (!found) {
-            msc_msg(MSC_FATAL, 9618,
-                "subcase %d selects TRIM = %d, and the bulk data has no TRIM %d.",
-                aet_g.sub_id[i], aet_g.sub_trim[i], aet_g.sub_trim[i]);
+            continue;
+        }
+        if (aet_g.sub_trim[i] >= 0) {
+            for (j = 0; j < aet_g.ntrim; j++) if (aet_g.trim[j].sid == aet_g.sub_trim[i]) found = 1;
+            if (!found) {
+                msc_msg(MSC_FATAL, 9618,
+                    "subcase %d selects TRIM = %d, and the bulk data has no TRIM %d.",
+                    aet_g.sub_id[i], aet_g.sub_trim[i], aet_g.sub_trim[i]);
+                bad = 1;
+            }
+        }
+        if (aet_g.sub_div[i] >= 0) {
+            found = 0;
+            for (j = 0; j < aet_g.ndiv; j++) if (aet_g.div[j].sid == aet_g.sub_div[i]) found = 1;
+            if (!found) {
+                msc_msg(MSC_FATAL, 9675,
+                    "subcase %d selects DIVERG = %d, and the bulk data has no DIVERG %d.",
+                    aet_g.sub_id[i], aet_g.sub_div[i], aet_g.sub_div[i]);
+                bad = 1;
+            }
+        }
+    }
+    for (j = 0; j < aet_g.ndiv; j++)
+        for (k = 0; k < aet_g.div[j].nm; k++)
+            if (aet_g.div[j].m[k] >= 1.0 || aet_g.div[j].m[k] < 0.0) {
+                msc_msg(MSC_FATAL, 9614,
+                    "DIVERG %d is at Mach %g: supersonic aerodynamics (ZONA51) are not\n"
+                    "available; the doublet lattice is subsonic.", aet_g.div[j].sid,
+                    aet_g.div[j].m[k]);
+                bad = 1;
+            }
+    /* the matrices: a vector in the j set (W2GJ, FA2J), a square one in
+     * the k set (WKK)                                                   */
+    for (j = 0; j < 3; j++) {
+        const aet_dmi *M = aet_matrix(j);
+        if (!M) continue;
+        if (j < 2 && M->n != 1) {
+            msc_msg(MSC_FATAL, 9676,
+                "%s %s has %d columns; MSC's %s is a single vector that applies to\n"
+                "every subcase (QRG DMIJ remark 1).", M->kind == 1 ? "DMI" : "DMIJ",
+                M->name, M->n, M->name);
+            bad = 1;
+        }
+        if (j == 2 && M->kind == 1 && !(M->form == 1 || M->form == 3 || M->form == 6 ||
+                                         M->form == 8 || (M->form == 2 && M->m == M->n))) {
+            msc_msg(MSC_FATAL, 9676,
+                "DMI %s is FORM %d, %d x %d: the box weights are a square matrix in\n"
+                "the k set (FORM 1, 3 diagonal, 6 or 8).", M->name, M->form, M->m, M->n);
             bad = 1;
         }
     }
-    /* the distinct Machs of the TRIM sets the subcases use              */
+    if (!aet_g.wkk.kind && !aet_g.wkk_k.kind && (aet_g.wtf.kind || aet_g.wtf_k.kind))
+        msc_msg(MSC_INFO, 9677,
+            "SOL 144: the deck has WTFACT and no WKK; WTFACT weights the box forces\n"
+            "and moments of the static aerodynamics (the guide: \"WKK (or WTFACT)\").");
+    /* the distinct Machs of the TRIM and DIVERG sets the subcases use   */
     free(aet_g.mach);
-    aet_g.mach = (double *) msc_alloc(sizeof(double) * (size_t) (aet_g.ntrim + 1));
+    {
+        int nmax = aet_g.ntrim + 1;
+        for (j = 0; j < aet_g.ndiv; j++) nmax += aet_g.div[j].nm;
+        aet_g.mach = (double *) msc_alloc(sizeof(double) * (size_t) nmax);
+    }
     aet_g.nmach = 0;
-    for (i = 0; i < aet_g.nsub; i++)
+    for (i = 0; i < aet_g.nsub; i++) {
         for (j = 0; j < aet_g.ntrim; j++) {
             if (aet_g.trim[j].sid != aet_g.sub_trim[i]) continue;
             for (k = 0; k < aet_g.nmach; k++)
                 if (fabs(aet_g.mach[k] - aet_g.trim[j].mach) <= 1e-9 * (1.0 + aet_g.trim[j].mach)) break;
             if (k == aet_g.nmach) aet_g.mach[aet_g.nmach++] = aet_g.trim[j].mach;
         }
+        for (j = 0; j < aet_g.ndiv; j++) {
+            int im;
+            if (aet_g.div[j].sid != aet_g.sub_div[i]) continue;
+            for (im = 0; im < aet_g.div[j].nm; im++) {
+                double mm = aet_g.div[j].m[im];
+                for (k = 0; k < aet_g.nmach; k++)
+                    if (fabs(aet_g.mach[k] - mm) <= 1e-9 * (1.0 + mm)) break;
+                if (k == aet_g.nmach) aet_g.mach[aet_g.nmach++] = mm;
+            }
+        }
+    }
     if (aet_g.aelink_sign < 0)
         msc_msg(MSC_WARN, 9619,
             "N95_AELINK_SIGN=-1: AELINK is read as u_D = sum C_i u_i, not as MSC's\n"
             "QRG writes it (u_D + sum C_i u_i = 0).");
-    if (!bad)
+    if (!bad) {
+        const aet_dmi *w = aet_matrix(0), *f = aet_matrix(1), *wk = aet_matrix(2);
+        int ndivsub = 0;
+        for (i = 0; i < aet_g.nsub; i++) if (aet_g.sub_div[i] >= 0) ndivsub++;
         msc_msg(MSC_INFO, 9620,
             "SOL 144: %d subcase%s, %d trim variable%s (%d AESTAT, %d AESURF), %d\n"
             "AELINK%s, %d Mach number%s; the aerodynamics at k = %g (COSMIC's\n"
@@ -413,6 +692,14 @@ int aet_check(void)
             aet_g.nstat + aet_g.nsurf, aet_g.nstat + aet_g.nsurf == 1 ? "" : "s",
             aet_g.nstat, aet_g.nsurf, aet_g.nlink, aet_g.nlink == 1 ? "" : "s",
             aet_g.nmach, aet_g.nmach == 1 ? "" : "s", aet_g.kred);
+        if (w || f || wk || ndivsub)
+            msc_msg(MSC_INFO, 9678,
+                "SOL 144: corrections %s%s%s%s%s%s%s; %d divergence subcase%s.",
+                w ? (w->kind == 1 ? "DMI " : "DMIJ ") : "", w ? "W2GJ " : "",
+                f ? (f->kind == 1 ? "DMI " : "DMIJ ") : "", f ? "FA2J " : "",
+                wk ? (wk->kind == 1 ? "DMI " : "DMIK ") : "", wk ? wk->name : "",
+                (w || f || wk) ? "" : "none", ndivsub, ndivsub == 1 ? "" : "s");
+    }
     return bad;
 }
 
@@ -501,10 +788,16 @@ static const char *aet_dmap[] = {
 "COND     LBL5,OMIT $",
 "SMP1     USET,KFF,MFF,,/GO,KAA,KOO,LOO,MAA,MOO,MOA,, $",
 "LABEL    LBL5 $",
+"PURGE    KRR,KLR,MLR,MRR,DM,MR,DG,MDL,XM,MXM,MDG,UDDT,QR/REACT $",
+"EQUIV    KAA,KLL/REACT/MAA,MLL/REACT $",
+"COND     LBLR1,REACT $",
 "RBMG1    USET,KAA,MAA/KLL,KLR,KRR,MLL,MLR,MRR $",
+"LABEL    LBLR1 $",
 "RBMG2    KLL/LLL $",
+"COND     LBLR2,REACT $",
 "RBMG3    LLL,KLR,KRR/DM $",
 "RBMG4    DM,MLL,MLR,MRR/MR $",
+"LABEL    LBLR2 $",
 "DPD      DYNAMICS,GPL,SIL,USET/GPLD,SILD,USETD,TFPOOL,,,,,,EED,EQDYN/",
 "         LUSET/S,N,LUSETD/NOTFL/NODLT/NOPSDL/NOFRL/",
 "         NONLFT/NOTRL/S,N,NOEED/123/S,N,NOUE $",
@@ -515,18 +808,25 @@ static const char *aet_dmap[] = {
 "GI       SPLINE,,CSTMA,BGPA,SIL,,,/GTKG/NK/LUSET $",
 "PARAM    //*ADD*/DESTRY/0/1/ $",
 "AMG      AERO,ACPT/AJJL,SKJ,D1JK,D2JK/NK/NJ/S,N,DESTRY $",
-"AETRIM   CASECC,USET,GTKA,,,,,,,,,,,,BGPDT,SIL,CSTMA,GPLA,USETA/ES,DG,,/",
-"         1 $",
+"AETRIM   CASECC,USET,GTKA,,,,,,,,,DM,,,BGPDT,SIL,CSTMA,GPLA,USETA/",
+"         ES,DG,,/1 $",
 "FBS      LLL,,ES/CLS/1/1/2 $",
+"COND     LBLR3,REACT $",
 "MPYAD    MLL,DM,MLR/MDL/0/1/1/2 $",
 "FBS      LLL,,MDL/XM/1/1/2 $",
 "MPYAD    MDL,XM,/MXM/1/1/1/2 $",
 "MPYAD    MGG,DG,/MDG/0/1/1/2 $",
+"LABEL    LBLR3 $",
 "AETRIM   CASECC,USET,GTKA,GTKG,AJJL,SKJ,D1JK,ACPT,CLS,XM,MXM,DM,MR,MDG,",
 "         BGPDT,SIL,CSTMA,GPLA,USETA/PLA,UDDT,PGT,/2 $",
+"EQUIV    PLA,PLT/REACT $",
+"COND     LBLR4,REACT $",
 "MPYAD    MDL,UDDT,PLA/PLT/0/-1/1/2 $",
+"LABEL    LBLR4 $",
 "FBS      LLL,,PLT/ULV/1/1/2 $",
-"SDR1     USET,PGT,ULV,,YS,GO,GM,,KFS,KSS,/UGV,PGG,QG/NSKIP/*STATICS* $",
+"SSG2     USET,GM,YS,KFS,GO,DM,PGT/QR,PO,PS,PLX $",
+"SDR1     USET,PGT,ULV,,YS,GO,GM,PS,KFS,KSS,QR/UGV,PGG,QG/NSKIP/",
+"         *STATICS* $",
 "SDR2     CASECC,CSTM,MPT,DIT,EQEXIN,SIL,GPTT,EDT,BGPDT,,QG,UGV,EST,,PGG,",
 "         PCOMPS/OPG1,OQG1,OUGV1,OES1,OEF1,PUGV1,OES1L,OEF1L/*STATICS*////",
 "         COMPS $",

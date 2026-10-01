@@ -46,6 +46,11 @@ extern void dgemm_(const char *ta, const char *tb, const int *m, const int *n,
                    const double *beta, double *c, const int *ldc,
                    size_t lta, size_t ltb);
 extern void ampczt_(const int *nt);   /* mis/ampczs: OpenBLAS's thread count */
+/* the divergence roots: every eigenvalue of a real non-symmetric matrix */
+extern void dgeev_(const char *jl, const char *jr, const int *n, double *a,
+                   const int *lda, double *wr, double *wi, double *vl,
+                   const int *ldvl, double *vr, const int *ldvr, double *work,
+                   const int *lwork, int *info, size_t ljl, size_t ljr);
 #endif
 
 /* C (m x n) = A (m x k) * B (k x n), all column-major, C overwritten  */
@@ -270,6 +275,7 @@ static struct {
     double *ajj;  int ajj_nrow, ajj_ncol;
     double *css, *xms, *mxm, *dm, *mr, *mdg;
     int     have_css, have_xms, have_mxm, have_dm, have_mr, have_mdg;
+    int     dm_nrow, dm_ncol;   /* DM as read (l x r)                     */
     /* the DLM geometry of the boxes, j order (ACPT)                    */
     double *bx_xic, *bx_dx, *bx_ys, *bx_zs, *bx_sg, *bx_cg, *bx_ee;
     int     nbox;
@@ -280,7 +286,20 @@ static struct {
     double  E[9];           /* reference axes in basic, column-major    */
     double  O[3];           /* reference origin, basic                  */
     double *rbg;            /* g x 6 rigid body modes about O           */
-    double  rbr[36];        /* nr x 6 (nr = 6)                          */
+    double  rbr[36];        /* nr x 6, leading dimension 6 (nr <= 6)    */
+    /* HALO (corrections): the aerodynamic frame (AEROS ACSID), in which
+     * ACPT has the boxes; the box geometry in basic                     */
+    double  Ea[9], Oa[3];
+    double *bx_pk, *bx_pc, *bx_n, *bx_s;  /* 3 per box: the k point (half
+                                           * chord), the collocation point
+                                           * (3/4 chord), the normal, the
+                                           * spanwise axis (R5's)         */
+    double  smask[6];       /* 1, or 0 for the components a half model
+                             * about x-z cancels (SYMXZ)                 */
+    /* the correction matrices in the j and k sets (msctrim.c reads them) */
+    double *wg, *fa;        /* W2GJ, FA2J (nj), or NULL                  */
+    int     nw;  int *w_r, *w_c;  double *w_v;   /* WKK (k x k), sparse */
+    int     have_w;
     /* outputs                                                         */
     double *es, *dg, *pla, *uddt, *pgt;
     int     es_nc, nsub;
@@ -376,6 +395,7 @@ void n95ta0_(const int *mode)
         T.nbox = 0;
         T.have_css = T.have_xms = T.have_mxm = T.have_dm = T.have_mr = T.have_mdg = 0;
     }
+    if (*mode == 1) { T.have_dm = 0; T.dm_nrow = T.dm_ncol = 0; }
 }
 
 static float wf(const int *w) { float f; memcpy(&f, w, sizeof(f)); return f; }
@@ -528,7 +548,12 @@ void n95tmb_(const int *kind, const int *nrow, const int *ncol, const int *cplx)
     case K_CLS:  free(T.css); T.css = DNEW((size_t) T.ns * T.ns);  T.have_css = mat_nrow > 0; break;
     case K_XM:   free(T.xms); T.xms = DNEW((size_t) T.ns * T.nr);  T.have_xms = mat_nrow > 0; break;
     case K_MXM:  free(T.mxm); T.mxm = DNEW(36);                    T.have_mxm = mat_nrow > 0; break;
-    case K_DM:   free(T.dm);  T.dm  = DNEW((size_t) T.nl * T.nr);  T.have_dm  = mat_nrow > 0; break;
+    case K_DM:
+        free(T.dm);
+        T.dm_nrow = mat_nrow; T.dm_ncol = mat_ncol;
+        T.dm = DNEW((size_t) mat_nrow * (size_t) (mat_ncol > 0 ? mat_ncol : 1));
+        T.have_dm = mat_nrow > 0;
+        break;
     case K_MR:   free(T.mr);  T.mr  = DNEW(36);                    T.have_mr  = mat_nrow > 0; break;
     case K_MDG:  free(T.mdg); T.mdg = DNEW((size_t) T.luset * T.nr); T.have_mdg = mat_nrow > 0; break;
     default: break;
@@ -560,8 +585,8 @@ void n95tmc_(const int *kind, const int *jcol, const double *col)
                 T.xms[(size_t) j * T.ns + i] = col[(size_t) T.s_l[i] * stride];
         break;
     case K_DM:
-        if (j < T.nr && mat_nrow == T.nl)
-            for (i = 0; i < T.nl; i++) T.dm[(size_t) j * T.nl + i] = col[(size_t) i * stride];
+        if (j < T.dm_ncol)
+            for (i = 0; i < T.dm_nrow; i++) T.dm[(size_t) j * T.dm_nrow + i] = col[(size_t) i * stride];
         break;
     case K_MXM:
         if (j < 6 && mat_nrow <= 6)
@@ -615,13 +640,60 @@ static int cs_axes(int id, double *ax, double *org)
     return 1;
 }
 
+/* HALO (corrections): the pseudo-inverse of a symmetric 6 x 6 (Jacobi
+ * rotations; the directions whose eigenvalue is below 1e-10 of the
+ * largest are left out). Used for the rigid body fit of a model whose a
+ * set does not see all six rigid body motions (a half model).          */
+static void pinv6(const double *a, double *ai)
+{
+    double A[36], V[36], d[6], big = 0.0;
+    int i, j, k, sweep;
+    memcpy(A, a, sizeof(A));
+    for (i = 0; i < 36; i++) V[i] = (i % 7 == 0) ? 1.0 : 0.0;
+    for (sweep = 0; sweep < 60; sweep++) {
+        double off = 0.0;
+        for (i = 0; i < 6; i++) for (j = i + 1; j < 6; j++) off += A[i + 6 * j] * A[i + 6 * j];
+        if (off < 1e-300) break;
+        for (i = 0; i < 6; i++)
+            for (j = i + 1; j < 6; j++) {
+                double apq = A[i + 6 * j], app, aqq, th, t, c, s;
+                if (fabs(apq) < 1e-300) continue;
+                app = A[i + 6 * i]; aqq = A[j + 6 * j];
+                th = 0.5 * (aqq - app) / apq;
+                t = (th >= 0.0 ? 1.0 : -1.0) / (fabs(th) + sqrt(th * th + 1.0));
+                c = 1.0 / sqrt(t * t + 1.0); s = t * c;
+                for (k = 0; k < 6; k++) {
+                    double akp = A[k + 6 * i], akq = A[k + 6 * j];
+                    A[k + 6 * i] = c * akp - s * akq;
+                    A[k + 6 * j] = s * akp + c * akq;
+                }
+                for (k = 0; k < 6; k++) {
+                    double apk = A[i + 6 * k], aqk = A[j + 6 * k];
+                    A[i + 6 * k] = c * apk - s * aqk;
+                    A[j + 6 * k] = s * apk + c * aqk;
+                }
+                for (k = 0; k < 6; k++) {
+                    double vkp = V[k + 6 * i], vkq = V[k + 6 * j];
+                    V[k + 6 * i] = c * vkp - s * vkq;
+                    V[k + 6 * j] = s * vkp + c * vkq;
+                }
+            }
+    }
+    for (i = 0; i < 6; i++) { d[i] = A[i + 6 * i]; if (fabs(d[i]) > big) big = fabs(d[i]); }
+    for (i = 0; i < 36; i++) ai[i] = 0.0;
+    for (k = 0; k < 6; k++) {
+        if (fabs(d[k]) <= 1e-10 * big) continue;
+        for (i = 0; i < 6; i++)
+            for (j = 0; j < 6; j++) ai[i + 6 * j] += V[i + 6 * k] * V[j + 6 * k] / d[k];
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* mode 1: the sets, the s-set, ES and DG                              */
 
 static int mode1(void)
 {
     int g, a, i, j, k, m;
-    double ax[9];
 
     if (!T.uset || T.luset <= 0) { fatal(9601, "USET was not available."); return 1; }
 
@@ -637,11 +709,11 @@ static int mode1(void)
         if (w & T.bit_ur) { T.a_r[a] = T.nr; T.r_a[T.nr++] = a; }
         else              { T.a_l[a] = T.nl; T.l_a[T.nl++] = a; }
     }
-    if (T.nr != 6) {
-        fatal(9602, "SOL 144 here needs a free-flying model SUPORTed on six\n"
-              "independent rigid body degrees of freedom (SUPORT or SUPORT1),\n"
-              "and the model has %d. Half models (SYMXZ) are not supported yet.",
-              T.nr);
+    /* HALO (corrections): a half model is SUPORTed on its symmetric (or
+     * antisymmetric) rigid body dofs, a wind-tunnel model on none        */
+    if (T.nr > 6) {
+        fatal(9602, "SOL 144 here takes at most six SUPORT degrees of freedom (one\n"
+              "set of rigid body motions), and the model has %d.", T.nr);
         return 1;
     }
     if (T.gtka.nr != T.na) {
@@ -679,6 +751,15 @@ static int mode1(void)
               "model.", aet_g.rcsid);
         return 1;
     }
+    /* the aerodynamic frame: AEROS ACSID (its x axis is the flow)      */
+    if (!cs_axes(aet_g.acsid, T.Ea, T.Oa)) {
+        fatal(9660, "AEROS ACSID %d is not a rectangular coordinate system of the\n"
+              "model.", aet_g.acsid);
+        return 1;
+    }
+    for (i = 0; i < 6; i++) T.smask[i] = 1.0;
+    if (aet_g.symxz > 0) T.smask[1] = T.smask[3] = T.smask[5] = 0.0;
+    if (aet_g.symxz < 0) T.smask[0] = T.smask[2] = T.smask[4] = 0.0;
 
     /* the rigid body modes of the g set about the reference point      */
     free(T.rbg);
@@ -710,11 +791,14 @@ static int mode1(void)
             }
         }
     }
-    /* RB_r (6 x 6): its rows are the r dofs                            */
-    for (i = 0; i < 6; i++)
+    /* RB_r (nr x 6): its rows are the r dofs                           */
+    memset(T.rbr, 0, sizeof(T.rbr));
+    for (i = 0; i < T.nr; i++)
         for (m = 0; m < 6; m++)
             T.rbr[i + 6 * m] = T.rbg[(size_t) m * T.luset + T.a_g[T.r_a[i]]];
-    {
+    free(T.dg);
+    T.dg = NULL;
+    if (T.nr == 6) {
         double lr[36];
         int    ip[6];
         memcpy(lr, T.rbr, sizeof(lr));
@@ -724,7 +808,6 @@ static int mode1(void)
             return 1;
         }
         /* DG = RB_g RB_r^-1: (RB_r^-T RB_g^T)^T; solve RB_r^T X = RB_g^T */
-        free(T.dg);
         T.dg = DNEW((size_t) T.luset * 6);
         {
             double rt[36], *bt = DNEW((size_t) 6 * T.luset);
@@ -738,8 +821,68 @@ static int mode1(void)
                 for (i = 0; i < 6; i++) T.dg[(size_t) i * T.luset + g] = bt[i + 6 * (size_t) g];
             free(bt);
         }
+    } else if (T.nr > 0) {
+        /* HALO (corrections): fewer than six SUPORT dofs (a half model):
+         * the rigid body modes of the r dofs are the structure's own DM
+         * on the a set ([DM; I]); in the g set they are the geometric
+         * modes RB_g C, C (6 x nr) the least-squares fit RB_a C = [DM; I]
+         * (exact when the SUPORT dofs are rigid body motions)           */
+        int    nr = T.nr, na = T.na;
+        double N[36], *R6 = DNEW((size_t) 6 * nr), res = 0.0, nrm = 0.0;
+        int    ipn[6];
+        if (!T.have_dm || T.dm_nrow != T.nl || T.dm_ncol != nr) {
+            fatal(9661, "the rigid body modes DM (%d x %d) do not match the l and r\n"
+                  "sets (%d x %d).", T.dm_nrow, T.dm_ncol, T.nl, nr);
+            free(R6);
+            return 1;
+        }
+        memset(N, 0, sizeof(N));
+        for (a = 0; a < na; a++) {
+            int    ga = T.a_g[a];
+            double ra[6], da[6];
+            for (m = 0; m < 6; m++) ra[m] = T.rbg[(size_t) m * T.luset + ga];
+            for (j = 0; j < nr; j++)
+                da[j] = T.a_l[a] >= 0 ? T.dm[(size_t) j * T.nl + T.a_l[a]] : (T.a_r[a] == j ? 1.0 : 0.0);
+            for (m = 0; m < 6; m++) {
+                for (k = 0; k < 6; k++) N[m + 6 * k] += ra[m] * ra[k];
+                for (j = 0; j < nr; j++) R6[m + 6 * j] += ra[m] * da[j];
+            }
+        }
+        {
+            /* C = pinv(RB_a^T RB_a) RB_a^T D_a: the minimum-norm fit, so
+             * a rigid body motion the a set cannot see (a half model's
+             * other symmetry) stays out of the g-set modes             */
+            double Ni[36], *t = DNEW((size_t) 6 * nr);
+            pinv6(N, Ni);
+            mm(6, nr, 6, Ni, 6, R6, 6, t, 6);
+            memcpy(R6, t, sizeof(double) * (size_t) 6 * nr);
+            free(t);
+            (void) ipn;
+        }
+        /* how well the fit holds: [DM; I] - RB_a C, relative            */
+        for (a = 0; a < na; a++) {
+            int ga = T.a_g[a];
+            for (j = 0; j < nr; j++) {
+                double da = T.a_l[a] >= 0 ? T.dm[(size_t) j * T.nl + T.a_l[a]] : (T.a_r[a] == j ? 1.0 : 0.0);
+                double f = 0.0;
+                for (m = 0; m < 6; m++) f += T.rbg[(size_t) m * T.luset + ga] * R6[m + 6 * j];
+                res += (da - f) * (da - f);
+                nrm += da * da;
+            }
+        }
+        if (nrm > 0.0 && sqrt(res / nrm) > 1e-6)
+            info(9663, "the SUPORT dofs' rigid body modes (DM) differ from the geometric\n"
+                 "rigid body motions by %.2e (relative): the inertia loads of the\n"
+                 "dofs outside the a set (OLOAD) are approximate.", sqrt(res / nrm));
+        T.dg = DNEW((size_t) T.luset * nr);
+        for (j = 0; j < nr; j++)
+            for (g = 0; g < T.luset; g++) {
+                double f = 0.0;
+                for (m = 0; m < 6; m++) f += T.rbg[(size_t) m * T.luset + g] * R6[m + 6 * j];
+                T.dg[(size_t) j * T.luset + g] = f;
+            }
+        free(R6);
     }
-    (void) ax;
     return 0;
 }
 
@@ -756,7 +899,10 @@ typedef struct {
 } xvar;
 
 static xvar *X;
-static int   NX;
+static int   NX;          /* the trim variables                         */
+static int   NXI;         /* and the intercept: column NX of every
+                           * aerodynamic matrix is the user's downwash
+                           * and pressures (W2GJ, FA2J), fixed at 1    */
 
 static int var_kind(const char *lab)
 {
@@ -779,11 +925,14 @@ static int find_x(const char *lab)
     return -1;
 }
 
+static int is_urdd(int c) { return c < NX && X[c].kind >= 5 && X[c].kind <= 10; }
+
 static int build_vars(void)
 {
     int i;
     free(X);
     NX = aet_g.nstat + aet_g.nsurf;
+    NXI = NX + 1;
     X = (xvar *) zalloc(sizeof(xvar) * (size_t) (NX ? NX : 1));
     for (i = 0; i < aet_g.nstat; i++) {
         X[i].id = aet_g.stat[i].id;
@@ -806,21 +955,16 @@ static int build_vars(void)
         v->kind = 11;
     }
     qsort(X, (size_t) NX, sizeof(xvar), xcmp);
-    if (NX == 0) { fatal(9622, "there are no AESTAT or AESURF trim variables."); return 1; }
     return 0;
 }
 
 /* the box index (j) of each box id                                    */
 static int box_index(int id)
 {
-    int lo = 0, hi = T.nbox - 1;
+    int j;
     /* box ids are ascending within a panel but not across all panels:
      * a plain search                                                    */
-    (void) lo; (void) hi;
-    {
-        int j;
-        for (j = 0; j < T.nbox; j++) if (T.box_id[j] == id) return j;
-    }
+    for (j = 0; j < T.nbox; j++) if (T.box_id[j] == id) return j;
     return -1;
 }
 
@@ -843,6 +987,159 @@ static int find_box_ids(void)
     return n;
 }
 
+/* HALO (corrections): the boxes in basic. ACPT has them in the
+ * aerodynamic frame (APD1/APDCS: x_aero = Ta^T (x_basic - Oa)), the
+ * k point at the half chord (XIC is the box's quarter chord), the
+ * collocation point at three quarters, the normal (0, -sin, cos) and
+ * the hinge (R5) axis (0, cos, sin) of the strip's dihedral            */
+static void box_geometry(void)
+{
+    int j, k;
+    free(T.bx_pk); free(T.bx_pc); free(T.bx_n); free(T.bx_s);
+    T.bx_pk = DNEW(3 * T.nbox); T.bx_pc = DNEW(3 * T.nbox);
+    T.bx_n  = DNEW(3 * T.nbox); T.bx_s  = DNEW(3 * T.nbox);
+    for (j = 0; j < T.nbox; j++) {
+        double pk[3] = { T.bx_xic[j] + 0.25 * T.bx_dx[j], T.bx_ys[j], T.bx_zs[j] };
+        double pc[3] = { T.bx_xic[j] + 0.50 * T.bx_dx[j], T.bx_ys[j], T.bx_zs[j] };
+        double n[3]  = { 0.0, -T.bx_sg[j], T.bx_cg[j] };
+        double sv[3] = { 0.0,  T.bx_cg[j], T.bx_sg[j] };
+        for (k = 0; k < 3; k++) {
+            T.bx_pk[3 * j + k] = T.Oa[k] + T.Ea[k] * pk[0] + T.Ea[k + 3] * pk[1] + T.Ea[k + 6] * pk[2];
+            T.bx_pc[3 * j + k] = T.Oa[k] + T.Ea[k] * pc[0] + T.Ea[k + 3] * pc[1] + T.Ea[k + 6] * pc[2];
+            T.bx_n[3 * j + k]  = T.Ea[k] * n[0]  + T.Ea[k + 3] * n[1]  + T.Ea[k + 6] * n[2];
+            T.bx_s[3 * j + k]  = T.Ea[k] * sv[0] + T.Ea[k + 3] * sv[1] + T.Ea[k + 6] * sv[2];
+        }
+    }
+}
+
+/* HALO (corrections): W2GJ and FA2J in the j set, WKK in the k set.
+ * DMI rows are MSC's set positions: the boxes by ascending box id (the
+ * guide, example HA144F: "the numbering begins with the lowest numbered
+ * CAERO1"), and in the k set T3 then R5 of each box; DMIJ / DMIK rows
+ * are box ids and components (3; 3 or 5). Returns 1 on a fatal.         */
+static int *sorted_boxes;     /* MSC's j position -> j index           */
+
+static int bxcmp(const void *a, const void *b)
+{
+    int ia = *(const int *) a, ib = *(const int *) b;
+    return T.box_id[ia] - T.box_id[ib];
+}
+
+static int k_index(const aet_dmi *M, int pos_or_id, int comp)
+{
+    int jb;
+    if (M->kind == 1) {
+        int p = pos_or_id - 1;
+        if (p < 0 || p >= 2 * T.nbox) return -1;
+        return 2 * sorted_boxes[p / 2] + (p % 2);
+    }
+    jb = box_index(pos_or_id);
+    if (jb < 0 || (comp != 3 && comp != 5)) return -1;
+    return 2 * jb + (comp == 5 ? 1 : 0);
+}
+
+static int j_index(const aet_dmi *M, int pos_or_id, int comp)
+{
+    if (M->kind == 1) {
+        int p = pos_or_id - 1;
+        if (p < 0 || p >= T.nbox) return -1;
+        return sorted_boxes[p];
+    }
+    if (comp != 3 && comp != 0) return -1;
+    return box_index(pos_or_id);
+}
+
+static int corrections(void)
+{
+    int i, w;
+    free(T.wg); free(T.fa); T.wg = T.fa = NULL;
+    free(T.w_r); free(T.w_c); free(T.w_v); T.w_r = T.w_c = NULL; T.w_v = NULL;
+    T.nw = 0; T.have_w = 0;
+    free(sorted_boxes);
+    sorted_boxes = INEW(T.nbox);
+    for (i = 0; i < T.nbox; i++) sorted_boxes[i] = i;
+    qsort(sorted_boxes, (size_t) T.nbox, sizeof(int), bxcmp);
+
+    for (w = 0; w < 2; w++) {
+        const aet_dmi *M = aet_matrix(w);
+        double *v;
+        int nbad = 0;
+        if (!M) continue;
+        if (M->kind == 1 && M->m != T.nj) {
+            fatal(9664, "DMI %s has %d rows and the j set %d (one per box).",
+                  M->name, M->m, T.nj);
+            return 1;
+        }
+        v = DNEW(T.nj);
+        for (i = 0; i < M->ne; i++) {
+            int j = j_index(M, M->e[i].ri, M->e[i].rc);
+            if (M->e[i].ci != 1) continue;
+            if (j < 0) { nbad++; continue; }
+            v[j] = M->e[i].v;
+        }
+        if (nbad)
+            info(9665, "%s %s: %d term%s name%s no box (or a component other than\n"
+                 "3) and %s left out.", M->kind == 1 ? "DMI" : "DMIJ", M->name, nbad,
+                 nbad == 1 ? "" : "s", nbad == 1 ? "s" : "", nbad == 1 ? "is" : "are");
+        if (w == 0) T.wg = v; else T.fa = v;
+    }
+    {
+        const aet_dmi *M = aet_matrix(2);
+        int nbad = 0;
+        if (M) {
+            if (M->kind == 1 && M->m != T.nk) {
+                fatal(9664, "DMI %s has %d rows and the k set %d (two per box).",
+                      M->name, M->m, T.nk);
+                return 1;
+            }
+            T.w_r = INEW(M->ne + T.nk); T.w_c = INEW(M->ne + T.nk);
+            T.w_v = DNEW(M->ne + T.nk);
+            if (M->kind == 1 && M->form == 8) {
+                for (i = 0; i < T.nk; i++) {
+                    T.w_r[T.nw] = T.w_c[T.nw] = i; T.w_v[T.nw++] = 1.0;
+                }
+            }
+            for (i = 0; i < M->ne; i++) {
+                int r, c;
+                if (M->kind == 1 && M->form == 3) {
+                    if (M->e[i].ci != 1) continue;      /* the diagonal */
+                    r = c = k_index(M, M->e[i].ri, 0);
+                } else {
+                    r = k_index(M, M->e[i].ri, M->e[i].rc);
+                    c = k_index(M, M->e[i].ci, M->e[i].cc);
+                }
+                if (r < 0 || c < 0) { nbad++; continue; }
+                T.w_r[T.nw] = r; T.w_c[T.nw] = c; T.w_v[T.nw++] = M->e[i].v;
+            }
+            T.have_w = 1;
+            if (nbad)
+                info(9665, "%s %s: %d term%s name%s no box component of the k set (3 or\n"
+                     "5) and %s left out.", M->kind == 1 ? "DMI" : "DMIK", M->name, nbad,
+                     nbad == 1 ? "" : "s", nbad == 1 ? "s" : "", nbad == 1 ? "is" : "are");
+        }
+    }
+    if (T.wg || T.fa || T.have_w) {
+        double wmin = 0.0, wmax = 0.0, gmin = 0.0, gmax = 0.0;
+        int nd = 0, ng = 0;
+        for (i = 0; i < T.nw; i++)
+            if (T.w_r[i] == T.w_c[i]) {
+                if (!nd || T.w_v[i] < wmin) wmin = T.w_v[i];
+                if (!nd || T.w_v[i] > wmax) wmax = T.w_v[i];
+                nd++;
+            }
+        if (T.wg) for (i = 0; i < T.nj; i++) {
+            if (!ng || T.wg[i] < gmin) gmin = T.wg[i];
+            if (!ng || T.wg[i] > gmax) gmax = T.wg[i];
+            ng++;
+        }
+        info(9666, "SOL 144 corrections: W2GJ %s (%.4e .. %.4e rad), FA2J %s,\n"
+             "WKK %s (%d terms, diagonal %.4f .. %.4f).",
+             T.wg ? "on" : "off", gmin, gmax, T.fa ? "on" : "off",
+             T.have_w ? "on" : "off", T.nw, wmin, wmax);
+    }
+    return 0;
+}
+
 /* the AJJ of a Mach (columns of AJJL are rows of A), column-major      */
 static double *aic_of_mach(double mach, int *ok)
 {
@@ -862,27 +1159,34 @@ static double *aic_of_mach(double mach, int *ok)
     return a;
 }
 
-/* per Mach: everything the aerodynamics give on the s set             */
+/* per Mach: everything the aerodynamics give on the s set. The force
+ * rows (Fs, Fr, Fx) are the r dofs' generalised forces, D_a^T G_a^T P,
+ * or with no SUPORT (nr = 0) the six forces at the reference point,
+ * RB_a^T G_a^T P (nq rows). Column NX of the x matrices is the
+ * intercept: W2GJ's downwash and FA2J's pressures.                     */
 typedef struct {
     double mach;
-    int    nj, nk, ns, nr, nx;
-    double *Qss, *Qsr, *Qsx;      /* G_s S A^-1 D1 G_s^T etc. (ns rows)  */
-    double *Fs, *Fr, *Fx;         /* B S A^-1 ... (nr rows)              */
-    double *Ux;                   /* 6 x nx, unsplined, at O, ref axes   */
-    double *Ps, *Px, *Pr;         /* S A^-1 ... at the k set (k rows)    */
+    int    nj, nk, ns, nr, nq, nx;
+    double *Qss, *Qsr, *Qsx;      /* G_s W S A^-1 D1 G_s^T etc. (ns rows) */
+    double *Fs, *Fr, *Fx;         /* B W S A^-1 ... (nq rows)            */
+    double *Ux;                   /* 6 x NXI, unsplined, at O, ref axes  */
+    double *Ps, *Px, *Pr;         /* W S A^-1 ... at the k set (k rows)  */
     double *Ws, *Wx;              /* A^-1 ...: the box pressures (j rows) */
     double *CQss, *CQsx, *CQsr;   /* C_ss Q_ss, C_ss Q_sx, C_ss Q_sr     */
 } aero_mach;
 
+static int nq_rows(void) { return T.nr > 0 ? T.nr : 6; }
+
 static int aero_for_mach(double mach, aero_mach *am, const double *djx)
 {
-    int nj = T.nj, nk = T.nk, ns = T.ns, nr = T.nr, nx = NX;
+    int nj = T.nj, nk = T.nk, ns = T.ns, nr = T.nr, nx = NXI, nq = nq_rows();
     int ncol = ns + nr + nx, i, j, m, okm, ok;
     double *A, *R, *P, *Gs, *B, *U;
     int    *ip;
 
     memset(am, 0, sizeof(*am));
-    am->mach = mach; am->nj = nj; am->nk = nk; am->ns = ns; am->nr = nr; am->nx = nx;
+    am->mach = mach; am->nj = nj; am->nk = nk; am->ns = ns; am->nr = nr;
+    am->nq = nq; am->nx = nx;
 
     A = aic_of_mach(mach, &okm);
     if (!okm) {
@@ -893,7 +1197,8 @@ static int aero_for_mach(double mach, aero_mach *am, const double *djx)
     ok = lu(nj, A, ip);
     if (!ok) { fatal(9631, "the AIC at Mach %g is singular.", mach); free(A); free(ip); return 1; }
 
-    /* the right hand sides: D1 G_s^T (ns), D1 G_a^T D_a (nr), D_jx (nx) */
+    /* the right hand sides: D1 G_s^T (ns), D1 G_a^T D_a (nr), D_jx (nx,
+     * the last the intercept's W2GJ)                                    */
     R = DNEW((size_t) nj * ncol);
     {
         /* G^T columns: for an a dof (row of GTKA), its k-set motion is
@@ -901,9 +1206,9 @@ static int aero_for_mach(double mach, aero_mach *am, const double *djx)
         double *gk = DNEW(nk);     /* one k vector                     */
         int     c;
         /* row access to GTKA: make a dense ns x nk copy (G_s) and the
-         * a x nk products with D_a on the fly                          */
+         * nq x nk products with D_a (or RB_a) on the fly               */
         Gs = DNEW((size_t) ns * nk);
-        B  = DNEW((size_t) nr * nk);           /* D_a^T G_a              */
+        B  = DNEW((size_t) nq * nk);
         for (j = 0; j < nk; j++) {
             for (m = T.gtka.cp[j]; m < T.gtka.cp[j + 1]; m++) {
                 int arow = T.gtka.ri[m];
@@ -912,24 +1217,40 @@ static int aero_for_mach(double mach, aero_mach *am, const double *djx)
                 if (l >= 0) {
                     int s = T.l_s[l];
                     if (s >= 0) Gs[s + (size_t) j * ns] = v;
-                    for (i = 0; i < nr; i++) B[i + (size_t) j * nr] += T.dm[(size_t) i * T.nl + l] * v;
-                } else if (r >= 0) {
-                    B[r + (size_t) j * nr] += v;
+                }
+                if (nr > 0) {
+                    if (l >= 0)
+                        for (i = 0; i < nr; i++) B[i + (size_t) j * nq] += T.dm[(size_t) i * T.nl + l] * v;
+                    else if (r >= 0)
+                        B[r + (size_t) j * nq] += v;
                 }
             }
+            /* no SUPORT (a wind-tunnel model): the box forces splined to
+             * the g set - the constrained dofs' share too, which is the
+             * mount's reaction - summed through the six geometric rigid
+             * body modes to the reference point                          */
+            if (nr == 0)
+                for (m = T.gtkg.cp[j]; m < T.gtkg.cp[j + 1]; m++) {
+                    int g = T.gtkg.ri[m];
+                    double v = T.gtkg.v[m];
+                    for (i = 0; i < 6; i++)
+                        B[i + (size_t) j * nq] += T.rbg[(size_t) i * T.luset + g] * v;
+                }
         }
-        /* D1 G^T x for each needed column x of G^T                     */
+        /* D1 G^T x for each needed column x of G^T (s and r)          */
         for (c = 0; c < ns + nr; c++) {
             for (j = 0; j < nk; j++)
-                gk[j] = (c < ns) ? Gs[c + (size_t) j * ns] : B[(c - ns) + (size_t) j * nr];
+                gk[j] = (c < ns) ? Gs[c + (size_t) j * ns] : B[(c - ns) + (size_t) j * nq];
             for (j = 0; j < nj; j++) {
                 double s = 0.0;
                 for (m = T.d1t.cp[j]; m < T.d1t.cp[j + 1]; m++) s += T.d1t.v[m] * gk[T.d1t.ri[m]];
                 R[j + (size_t) c * nj] = s;
             }
         }
-        for (c = 0; c < nx; c++)
+        for (c = 0; c < NX; c++)
             for (j = 0; j < nj; j++) R[j + (size_t) (ns + nr + c) * nj] = djx[j + (size_t) c * nj];
+        if (T.wg)
+            for (j = 0; j < nj; j++) R[j + (size_t) (ns + nr + NX) * nj] = T.wg[j];
         free(gk);
     }
     lus(nj, A, ip, R, ncol);         /* R <- A^-1 R: the pressures     */
@@ -944,25 +1265,45 @@ static int aero_for_mach(double mach, aero_mach *am, const double *djx)
             int c;
             for (c = 0; c < ncol; c++) P[kk + (size_t) c * nk] += v * R[j + (size_t) c * nj];
         }
-    /* the pressure coefficients, kept for APRES                       */
+    /* HALO (corrections): WKK weights every box force and moment of the
+     * theory (2-106..2-108: Q = G^T W S A^-1 D); FA2J's experimental
+     * pressures (per unit q) are added unweighted, q S FA2J (2-106)     */
+    if (T.have_w) {
+        double *PW = DNEW((size_t) nk * ncol);
+        int c, t;
+        for (t = 0; t < T.nw; t++) {
+            int r = T.w_r[t], cc = T.w_c[t];
+            double v = T.w_v[t];
+            for (c = 0; c < ncol; c++) PW[r + (size_t) c * nk] += v * P[cc + (size_t) c * nk];
+        }
+        free(P);
+        P = PW;
+    }
+    if (T.fa)
+        for (j = 0; j < nj; j++)
+            for (m = T.skj.cp[j]; m < T.skj.cp[j + 1]; m++)
+                P[T.skj.ri[m] + (size_t) (ns + nr + NX) * nk] += T.skj.v[m] * T.fa[j];
+    /* the pressure coefficients, kept for APRES (the intercept's with
+     * FA2J's)                                                          */
     am->Ws = DNEW((size_t) nj * ns); am->Wx = DNEW((size_t) nj * nx);
     memcpy(am->Ws, R, sizeof(double) * (size_t) nj * ns);
     memcpy(am->Wx, R + (size_t) nj * (ns + nr), sizeof(double) * (size_t) nj * nx);
+    if (T.fa) for (j = 0; j < nj; j++) am->Wx[j + (size_t) nj * NX] += T.fa[j];
     free(R);
 
     /* the splined generalised forces on the s set and at the SUPORT    */
     {
-        double *Q = DNEW((size_t) ns * ncol), *F = DNEW((size_t) nr * ncol);
+        double *Q = DNEW((size_t) ns * ncol), *F = DNEW((size_t) nq * ncol);
         mm(ns, ncol, nk, Gs, ns, P, nk, Q, ns);
-        mm(nr, ncol, nk, B, nr, P, nk, F, nr);
+        mm(nq, ncol, nk, B, nq, P, nk, F, nq);
         am->Qss = DNEW((size_t) ns * ns); am->Qsr = DNEW((size_t) ns * nr); am->Qsx = DNEW((size_t) ns * nx);
-        am->Fs  = DNEW((size_t) nr * ns); am->Fr  = DNEW((size_t) nr * nr); am->Fx  = DNEW((size_t) nr * nx);
+        am->Fs  = DNEW((size_t) nq * ns); am->Fr  = DNEW((size_t) nq * nr); am->Fx  = DNEW((size_t) nq * nx);
         memcpy(am->Qss, Q, sizeof(double) * (size_t) ns * ns);
         memcpy(am->Qsr, Q + (size_t) ns * ns, sizeof(double) * (size_t) ns * nr);
         memcpy(am->Qsx, Q + (size_t) ns * (ns + nr), sizeof(double) * (size_t) ns * nx);
-        memcpy(am->Fs, F, sizeof(double) * (size_t) nr * ns);
-        memcpy(am->Fr, F + (size_t) nr * ns, sizeof(double) * (size_t) nr * nr);
-        memcpy(am->Fx, F + (size_t) nr * (ns + nr), sizeof(double) * (size_t) nr * nx);
+        memcpy(am->Fs, F, sizeof(double) * (size_t) nq * ns);
+        memcpy(am->Fr, F + (size_t) nq * ns, sizeof(double) * (size_t) nq * nr);
+        memcpy(am->Fx, F + (size_t) nq * (ns + nr), sizeof(double) * (size_t) nq * nx);
         free(Q); free(F);
     }
     am->Ps = DNEW((size_t) nk * ns); am->Px = DNEW((size_t) nk * nx);
@@ -974,12 +1315,10 @@ static int aero_for_mach(double mach, aero_mach *am, const double *djx)
     /* unsplined: the box forces straight to the reference point         */
     U = DNEW((size_t) 6 * nx);
     for (j = 0; j < nj && 2 * j + 1 < nk; j++) {
-        double n[3] = { 0.0, -T.bx_sg[j], T.bx_cg[j] };
-        double s[3] = { 0.0,  T.bx_cg[j], T.bx_sg[j] };
-        double rc[3] = { T.bx_xic[j] + 0.25 * T.bx_dx[j], T.bx_ys[j], T.bx_zs[j] };
+        const double *n = &T.bx_n[3 * j], *s = &T.bx_s[3 * j];
         double d[3], mn[3];
         int c, k2;
-        for (k2 = 0; k2 < 3; k2++) d[k2] = rc[k2] - T.O[k2];
+        for (k2 = 0; k2 < 3; k2++) d[k2] = T.bx_pk[3 * j + k2] - T.O[k2];
         cross(d, n, mn);
         for (c = 0; c < nx; c++) {
             double f = P[(2 * j) + (size_t) (ns + nr + c) * nk];
@@ -1035,16 +1374,12 @@ static double *hinge_rows(void)
             if (!L) continue;
             for (li = 0; li < L->n; li++) {
                 int jb = box_index(L->ids[li]);
-                double n[3], sv[3], d[3], t[3];
+                double d[3], t[3];
                 if (jb < 0 || 2 * jb + 1 >= nk) continue;
-                n[0] = 0.0; n[1] = -T.bx_sg[jb]; n[2] = T.bx_cg[jb];
-                sv[0] = 0.0; sv[1] = T.bx_cg[jb]; sv[2] = T.bx_sg[jb];
-                d[0] = T.bx_xic[jb] + 0.25 * T.bx_dx[jb] - org[0];
-                d[1] = T.bx_ys[jb] - org[1];
-                d[2] = T.bx_zs[jb] - org[2];
-                cross(d, n, t);
+                for (k = 0; k < 3; k++) d[k] = T.bx_pk[3 * jb + k] - org[k];
+                cross(d, &T.bx_n[3 * jb], t);
                 H[(size_t) is * nk + 2 * jb]     += dot(t, h);
-                H[(size_t) is * nk + 2 * jb + 1] += dot(sv, h);
+                H[(size_t) is * nk + 2 * jb + 1] += dot(&T.bx_s[3 * jb], h);
             }
         }
     }
@@ -1055,8 +1390,8 @@ static double *hinge_rows(void)
 static double *downwash(void)
 {
     int nj = T.nj, c, j, k;
-    double *D = DNEW((size_t) nj * NX);
-    double xh[3] = { 1.0, 0.0, 0.0 };       /* the flow (ACSID 0)        */
+    double *D = DNEW((size_t) nj * (NX ? NX : 1));
+    const double *xh = &T.Ea[0];            /* the flow: ACSID's x axis */
     for (c = 0; c < NX; c++) {
         xvar *v = &X[c];
         if (v->kind >= 5 && v->kind <= 10) continue;     /* accelerations */
@@ -1086,24 +1421,22 @@ static double *downwash(void)
                 }
                 for (li = 0; li < L->n; li++) {
                     int jb = box_index(L->ids[li]);
-                    double n[3];
                     if (jb < 0) {
                         fatal(9625, "AELIST %d names box %d, which no CAERO1 makes.",
                               L->sid, L->ids[li]);
                         free(D);
                         return NULL;
                     }
-                    n[0] = 0.0; n[1] = -T.bx_sg[jb]; n[2] = T.bx_cg[jb];
                     /* w = -n . (delta h x V_hat), scaled by EFF            */
-                    D[jb + (size_t) c * nj] += -sf->eff * dot(n, hx);
+                    D[jb + (size_t) c * nj] += -sf->eff * dot(&T.bx_n[3 * jb], hx);
                 }
             }
             continue;
         }
         for (j = 0; j < nj; j++) {
-            double n[3] = { 0.0, -T.bx_sg[j], T.bx_cg[j] };
-            double r[3] = { T.bx_xic[j] + 0.5 * T.bx_dx[j] - T.O[0],
-                            T.bx_ys[j] - T.O[1], T.bx_zs[j] - T.O[2] };
+            const double *n = &T.bx_n[3 * j];
+            double r[3] = { T.bx_pc[3 * j] - T.O[0], T.bx_pc[3 * j + 1] - T.O[1],
+                            T.bx_pc[3 * j + 2] - T.O[2] };
             double e[3], t[3], w = 0.0;
             int    axis = 0;
             double scale = 1.0;
@@ -1115,6 +1448,17 @@ static double *downwash(void)
             case 4: axis = 2; scale = 2.0 / aet_g.refb; break;   /* YAW   */
             }
             for (k = 0; k < 3; k++) e[k] = T.E[k + 3 * axis];
+            /* HALO (corrections): SIDES is the sideslip angle, the wind
+             * from the reference y side: a rotation about V_hat x y_ref,
+             * which is +z_ref when x_ref is the flow (z up) and -z_ref in
+             * MSC's NACA axes (x forward, z down; example HA144D's CY of
+             * SIDES is negative, a fin's)                              */
+            if (v->kind == 1) {
+                double ax2[3], nn;
+                cross(xh, &T.E[3], ax2);
+                nn = sqrt(dot(ax2, ax2));
+                if (nn > 0.0) for (k = 0; k < 3; k++) e[k] = ax2[k] / nn;
+            }
             if (v->kind <= 1) {
                 cross(e, xh, t);                         /* phi x V_hat   */
                 w = -dot(n, t);
@@ -1205,38 +1549,53 @@ static void print_transform(void)
     out("");
 }
 
+/* one number of a derivative table, or N/A (a column that does not
+ * exist: the unrestrained ones of a model with no SUPORT, as MSC)      */
+static const char *num13(char *buf, double v, int na)
+{
+    if (na) strcpy(buf, "     N/A     ");
+    else sprintf(buf, "%13.6E", v);
+    return buf;
+}
+
 /* one variable's six rows; cols[6][6] are the six coefficients (rows)
- * of the six columns                                                  */
-static void print_var_rows(const char *label, double cols[6][6])
+ * of the six columns; unr_na: the unrestrained columns are N/A          */
+static void print_var_rows(const char *label, double cols[6][6], int unr_na)
 {
     static const char *cn[6] = { "CX", "CY", "CZ", "CMX", "CMY", "CMZ" };
     int r;
+    char b3[16], b5[16];
     for (r = 0; r < 6; r++)
-        out("    %-17s%-10s%13.6E   %13.6E    %13.6E   %13.6E    %13.6E   %13.6E",
+        out("    %-17s%-10s%13.6E   %13.6E    %13.6E   %s    %13.6E   %s",
             r == 0 ? label : "", cn[r], cols[0][r], cols[1][r], cols[2][r],
-            cols[3][r], cols[4][r], cols[5][r]);
+            num13(b3, cols[3][r], unr_na), cols[4][r], num13(b5, cols[5][r], unr_na));
     out("");
 }
 
-/* forces at the r dofs -> the six reference-axis coefficients         */
+/* forces at the r dofs -> the six reference-axis coefficients (TR =
+ * RB_r^T); with no SUPORT the forces are the six at the reference point
+ * already                                                              */
 static void to_coeffs(const double *fr, double q, double *c6)
 {
     int i, k;
     double f[6];
-    /* TR = RB_r^T: F_ref = RB_r^T F_r                                  */
-    for (i = 0; i < 6; i++) {
-        double s = 0.0;
-        for (k = 0; k < 6; k++) s += T.rbr[k + 6 * i] * fr[k];
-        f[i] = s;
+    if (T.nr > 0) {
+        for (i = 0; i < 6; i++) {
+            double s = 0.0;
+            for (k = 0; k < T.nr; k++) s += T.rbr[k + 6 * i] * fr[k];
+            f[i] = s;
+        }
+    } else {
+        for (i = 0; i < 6; i++) f[i] = fr[i];
     }
-    for (i = 0; i < 6; i++) c6[i] = f[i] / (q * aet_g.refs);
+    for (i = 0; i < 6; i++) c6[i] = T.smask[i] != 0.0 ? f[i] / (q * aet_g.refs) : 0.0;
     c6[3] /= aet_g.refb; c6[4] /= aet_g.refc; c6[5] /= aet_g.refb;
 }
 
 static void ref_coeffs(const double *fref, double q, double *c6)
 {
     int i;
-    for (i = 0; i < 6; i++) c6[i] = fref[i] / (q * aet_g.refs);
+    for (i = 0; i < 6; i++) c6[i] = T.smask[i] != 0.0 ? fref[i] / (q * aet_g.refs) : 0.0;
     c6[3] /= aet_g.refb; c6[4] /= aet_g.refc; c6[5] /= aet_g.refb;
 }
 
@@ -1249,14 +1608,152 @@ static int trim_index(int sid)
     return -1;
 }
 
+static int div_index(int sid)
+{
+    int i;
+    for (i = 0; i < aet_g.ndiv; i++) if (aet_g.div[i].sid == sid) return i;
+    return -1;
+}
+
+/* ------------------------------------------------------------------ */
+/* HALO (corrections): static aeroelastic divergence (MSC eqs. 2-143 ..
+ * 2-145): [K_ll - q Q_ll] u_l = 0, Q_ll the aerodynamics of the
+ * restrained vehicle (the l set; WKK weighted, as PFAERO's WSKJ). Q_ll
+ * is zero outside the splined set s, so with C_ss the s rows of
+ * K_ll^-1 E_s the nonzero roots are exactly those of
+ *
+ *     (C_ss Q_ss) u_s = (1/q) u_s
+ *
+ * a dense ns x ns real eigenproblem (LAPACK DGEEV): every root, where
+ * MSC asks a complex Lanczos for some. MSC writes the problem as CEAD's
+ * [K + p^2 Q] (DIVERGRS step 9) and reports p, with q = -p^2 (the
+ * guide's eq. 5-1); p = i sqrt(q) here, so a positive q is a positive
+ * imaginary p as in MSC's listing 5-1 and a negative one a negative
+ * real p. The physically meaningful roots are the real positive q.     */
+typedef struct { double qr, qi, pr, pi, mag; int order; } droot;
+
+static int drcmp(const void *a, const void *b)
+{
+    double x = ((const droot *) a)->mag, y = ((const droot *) b)->mag;
+    return x < y ? -1 : (x > y ? 1 : 0);
+}
+
+static void divergence(int isub, const aet_div *dv, aero_mach *AM, int nmach)
+{
+    int im, ns = T.ns;
+    for (im = 0; im < dv->nm; im++) {
+        aero_mach *am = NULL;
+        int k, nroot = 0, npos = 0, nprint;
+        droot *rt;
+        double *wr, *wi;
+        for (k = 0; k < nmach; k++)
+            if (fabs(aet_g.mach[k] - dv->m[im]) <= 1e-9 * (1.0 + dv->m[im])) am = &AM[k];
+        if (!am) { fatal(9667, "no aerodynamics at Mach %g (DIVERG %d).", dv->m[im], dv->sid); return; }
+        wr = DNEW(ns); wi = DNEW(ns);
+#ifdef N95_LAPACK
+        {
+            double *a = DNEW((size_t) ns * ns), wq, *work, dum = 0.0;
+            int lwork = -1, info_ev = 0, one = 1;
+            memcpy(a, am->CQss, sizeof(double) * (size_t) ns * ns);
+            dgeev_("N", "N", &ns, a, &ns, wr, wi, &dum, &one, &dum, &one, &wq, &lwork, &info_ev, 1, 1);
+            lwork = (int) wq + 1;
+            work = DNEW(lwork);
+            dgeev_("N", "N", &ns, a, &ns, wr, wi, &dum, &one, &dum, &one, work, &lwork, &info_ev, 1, 1);
+            free(work); free(a);
+            if (info_ev != 0) {
+                fatal(9668, "DIVERG %d at Mach %g: the eigenvalue solution did not converge\n"
+                      "(DGEEV INFO %d).", dv->sid, dv->m[im], info_ev);
+                free(wr); free(wi);
+                return;
+            }
+        }
+#else
+        fatal(9668, "DIVERG needs the build's LAPACK (N95_LAPACK).");
+        free(wr); free(wi);
+        return;
+#endif
+        /* q = 1/mu for every nonzero eigenvalue mu of C_ss Q_ss          */
+        rt = (droot *) zalloc(sizeof(droot) * (size_t) (ns ? ns : 1));
+        {
+            double big = 0.0;
+            for (k = 0; k < ns; k++) {
+                double a = sqrt(wr[k] * wr[k] + wi[k] * wi[k]);
+                if (a > big) big = a;
+            }
+            for (k = 0; k < ns; k++) {
+                double a2 = wr[k] * wr[k] + wi[k] * wi[k];
+                double qr, qi, r, ph, sr, si;
+                if (sqrt(a2) <= 1e-12 * big || a2 == 0.0) continue;
+                qr = wr[k] / a2; qi = -wi[k] / a2;
+                /* p = i sqrt(q), the principal root                      */
+                r = sqrt(sqrt(qr * qr + qi * qi));
+                ph = 0.5 * atan2(qi, qr);
+                sr = r * cos(ph); si = r * sin(ph);
+                rt[nroot].qr = qr; rt[nroot].qi = qi;
+                rt[nroot].pr = -si; rt[nroot].pi = sr;
+                /* a real negative q: the negative real p, as MSC prints it */
+                if (qr < 0.0 && fabs(qi) <= 1e-9 * fabs(qr)) {
+                    rt[nroot].pr = -sqrt(-qr); rt[nroot].pi = 0.0;
+                }
+                if (qr > 0.0 && fabs(qi) <= 1e-9 * fabs(qr)) {
+                    rt[nroot].pr = 0.0; rt[nroot].pi = sqrt(qr);
+                }
+                rt[nroot].mag = sqrt(qr * qr + qi * qi);
+                rt[nroot].order = k + 1;
+                nroot++;
+            }
+        }
+        qsort(rt, (size_t) nroot, sizeof(droot), drcmp);
+        /* the complex table: the roots of least |q| (twice NROOT, at
+         * least ten), as a complex eigensolver would have found them      */
+        nprint = 2 * dv->nroot;
+        if (nprint < 10) nprint = 10;
+        if (nprint > nroot) nprint = nroot;
+        new_page(isub);
+        out("");
+        out("                                       C O M P L E X   E I G E N V A L U E   S U M M A R Y");
+        out("0                ROOT     EXTRACTION                  EIGENVALUE                     FREQUENCY              DAMPING");
+        out("                 NO.        ORDER             (REAL)           (IMAG)                (CYCLES)            COEFFICIENT");
+        for (k = 0; k < nprint; k++) {
+            double f = rt[k].pi / (2.0 * 3.14159265358979323846), d = 0.0;
+            if (fabs(rt[k].pi) > 1e-12 * rt[k].mag) d = -2.0 * rt[k].pr / rt[k].pi + 0.0;
+            else f = 0.0;
+            if (d == 0.0) d = 0.0;
+            out("                 %8d   %8d       %13.6E    %13.6E          %13.6E         %13.6E",
+                k + 1, rt[k].order, rt[k].pr, rt[k].pi, f, d);
+        }
+        out("");
+        /* the divergence table: the real positive q, the NROOT lowest     */
+        out("");
+        out("                                        D I V E R G E N C E   S U M M A R Y");
+        out("");
+        out("                                 MACH NUMBER = %12.6f       METHOD = DGEEV, SPLINED SET (%d)", dv->m[im], ns);
+        out("");
+        out("                                 ROOT           DIVERGENCE                EIGENVALUE");
+        out("                                  NO.        DYNAMIC PRESSURE         REAL            IMAGINARY");
+        out("");
+        for (k = 0; k < nroot && npos < dv->nroot; k++) {
+            if (rt[k].qr <= 0.0 || fabs(rt[k].qi) > 1e-6 * rt[k].mag) continue;
+            out("                                %4d          %13.6E      %13.6E     %13.6E",
+                k + 1, rt[k].qr, rt[k].pr, rt[k].pi);
+            npos++;
+        }
+        if (npos == 0)
+            out("                                  NO DIVERGENCE ROOT: NO REAL POSITIVE DYNAMIC PRESSURE OF THE %d ROOTS", nroot);
+        out("");
+        free(rt); free(wr); free(wi);
+    }
+}
+
 static int mode2(void)
 {
-    int ns = T.ns, nr = T.nr, nk, nj, nsub, isub, i, j, k, c, im;
+    int ns = T.ns, nr = T.nr, nq, nk, nj, nsub, isub, i, j, k, c, im;
     double *djx = NULL, *HM = NULL;
     aero_mach *AM = NULL;
     int nmach = aet_g.nmach;
 
     nk = T.nk; nj = T.nj;
+    nq = nq_rows();
     /* AMG writes SKJ once per (Mach, k) pair, NJ columns each; the
      * doublet lattice's is geometry alone, so the first block serves     */
     if (T.gtka.nc != nk || T.skj.nr != nk || nj <= 0 || T.skj.nc < nj ||
@@ -1275,13 +1772,20 @@ static int mode2(void)
               "number NJ = %d.", nj);
         return 1;
     }
-    if (!T.have_css || !T.have_xms || !T.have_mxm || !T.have_dm || !T.have_mr) {
+    if (!T.have_css || (nr > 0 && (!T.have_xms || !T.have_mxm || !T.have_dm || !T.have_mr))) {
         fatal(9635, "a structural matrix the trim needs was not available (CLS %d,\n"
               "XM %d, MXM %d, DM %d, MR %d).", T.have_css, T.have_xms, T.have_mxm,
               T.have_dm, T.have_mr);
         return 1;
     }
+    if (nr > 0 && (T.dm_nrow != T.nl || T.dm_ncol != nr)) {
+        fatal(9661, "the rigid body modes DM (%d x %d) do not match the l and r\n"
+              "sets (%d x %d).", T.dm_nrow, T.dm_ncol, T.nl, nr);
+        return 1;
+    }
     if (build_vars()) return 1;
+    box_geometry();
+    if (corrections()) return 1;
     info(9650, "SOL 144: the a set has %d dofs (l %d, r %d), %d of them splined (the s\n"
          "set); %d boxes, %d k-set dofs; %d trim variables, %d subcases, %d Mach\n"
          "number%s.", T.na, T.nl, T.nr, T.ns, nj, nk, NX, T.ncase, aet_g.nmach,
@@ -1300,24 +1804,40 @@ static int mode2(void)
     T.nsub = nsub;
     free(T.pla); free(T.uddt); free(T.pgt);
     T.pla  = DNEW((size_t) T.nl * nsub);
-    T.uddt = DNEW((size_t) nr * nsub);
+    T.uddt = DNEW((size_t) (nr ? nr : 1) * nsub);
     T.pgt  = DNEW((size_t) T.luset * nsub);
 
     for (isub = 0; isub < nsub; isub++) {
-        int sid = -1, it, nfix = 0, nlnk = 0, neq, info_ok;
+        int sid = -1, dsid = -1, it, nfix = 0, nlnk = 0, neq, info_ok, have_sub = 0;
         const aet_trimc *tc;
         aero_mach *am = NULL;
         double q, qe, *Z, *RHS, *Usx, *Usr, *Usa;
         int *ipz;
-        double Ax[6 * 64];            /* RB_r e_x / AUNITS, nr x nx (nx <= 64) */
+        double Ax[6 * 65];            /* RB_r e_x / AUNITS, nr x NXI       */
         double *FR, *IR, *UNR, *ux, *Mx, *Mr, *Ma, *Fr, *Fa;
         int    *status;               /* 0 free 1 fixed 2 linked           */
         double *cpk = NULL;           /* APRES/AEROF: cp (nj), forces (nk)  */
         double *URU = NULL;           /* unrestrained u_r, u''_r per variable */
+        int     unr_na = (nr == 0);   /* no SUPORT: no unrestrained columns */
 
         for (i = 0; i < aet_g.nsub; i++)
-            if (aet_g.sub_id[i] == T.case_id[isub]) { sid = aet_g.sub_trim[i]; break; }
-        if (sid < 0 && aet_g.nsub == nsub) sid = aet_g.sub_trim[isub];
+            if (aet_g.sub_id[i] == T.case_id[isub]) {
+                sid = aet_g.sub_trim[i]; dsid = aet_g.sub_div[i]; have_sub = 1; break;
+            }
+        if (!have_sub && aet_g.nsub == nsub) { sid = aet_g.sub_trim[isub]; dsid = aet_g.sub_div[isub]; }
+
+        /* a divergence subcase without a trim                            */
+        if (sid < 0 && dsid >= 0) {
+            int id = div_index(dsid);
+            if (id < 0) {
+                fatal(9669, "subcase %d selects DIVERG = %d, which the deck does not define.",
+                      T.case_id[isub], dsid);
+                free(djx); return 1;
+            }
+            divergence(isub, &aet_g.div[id], AM, nmach);
+            if (T.fatal) { free(djx); return 1; }
+            continue;
+        }
         it = trim_index(sid);
         if (it < 0) {
             fatal(9640, "subcase %d selects no TRIM set the deck defines (TRIM = %d).",
@@ -1335,7 +1855,7 @@ static int mode2(void)
         /* the accelerations: u''_r = RB_r (URDD / AUNITS)               */
         memset(Ax, 0, sizeof(Ax));
         for (c = 0; c < NX; c++)
-            if (X[c].kind >= 5 && X[c].kind <= 10)
+            if (is_urdd(c))
                 for (i = 0; i < nr; i++)
                     Ax[i + nr * c] = T.rbr[i + 6 * (X[c].kind - 5)] / aet_g.aunits;
 
@@ -1352,50 +1872,54 @@ static int mode2(void)
                   T.case_id[isub], q);
             free(Z); free(ipz); free(djx); return 1;
         }
-        RHS = DNEW((size_t) ns * (NX + nr + nr));
-        memcpy(RHS, am->CQsx, sizeof(double) * (size_t) ns * NX);
-        memcpy(RHS + (size_t) ns * NX, am->CQsr, sizeof(double) * (size_t) ns * nr);
-        for (j = 0; j < ns * NX; j++) RHS[j] *= q;
-        for (j = 0; j < ns * nr; j++) RHS[(size_t) ns * NX + j] *= qe;
-        for (j = 0; j < ns * nr; j++) RHS[(size_t) ns * (NX + nr) + j] = -T.xms[j];
-        lus(ns, Z, ipz, RHS, NX + nr + nr);
-        Usx = RHS; Usr = RHS + (size_t) ns * NX; Usa = RHS + (size_t) ns * (NX + nr);
+        RHS = DNEW((size_t) ns * (NXI + nr + nr));
+        memcpy(RHS, am->CQsx, sizeof(double) * (size_t) ns * NXI);
+        memcpy(RHS + (size_t) ns * NXI, am->CQsr, sizeof(double) * (size_t) ns * nr);
+        for (j = 0; j < ns * NXI; j++) RHS[j] *= q;
+        for (j = 0; j < ns * nr; j++) RHS[(size_t) ns * NXI + j] *= qe;
+        for (j = 0; j < ns * nr; j++) RHS[(size_t) ns * (NXI + nr) + j] = -T.xms[j];
+        lus(ns, Z, ipz, RHS, NXI + nr + nr);
+        Usx = RHS; Usr = RHS + (size_t) ns * NXI; Usa = RHS + (size_t) ns * (NXI + nr);
 
-        /* restrained elastic forces at the r dofs, per variable           */
-        FR = DNEW((size_t) nr * NX); IR = DNEW((size_t) nr * NX);
-        Fa = DNEW((size_t) nr * nr); Fr = DNEW((size_t) nr * nr);
-        mm(nr, nr, ns, am->Fs, nr, Usa, ns, Fa, nr);
-        for (j = 0; j < nr * nr; j++) Fa[j] *= qe;
-        mm(nr, nr, ns, am->Fs, nr, Usr, ns, Fr, nr);
-        for (j = 0; j < nr * nr; j++) Fr[j] = qe * (am->Fr[j] + Fr[j]);
-        mm(nr, NX, ns, am->Fs, nr, Usx, ns, FR, nr);
-        for (c = 0; c < NX; c++) {
-            if (X[c].kind >= 5 && X[c].kind <= 10) {
-                for (i = 0; i < nr; i++) {
+        /* restrained elastic forces at the r dofs (or the reference point
+         * when there is no SUPORT), per variable and the intercept         */
+        FR = DNEW((size_t) nq * NXI); IR = DNEW((size_t) nq * NXI);
+        Fa = DNEW((size_t) nq * nr); Fr = DNEW((size_t) nq * nr);
+        mm(nq, nr, ns, am->Fs, nq, Usa, ns, Fa, nq);
+        for (j = 0; j < nq * nr; j++) Fa[j] *= qe;
+        mm(nq, nr, ns, am->Fs, nq, Usr, ns, Fr, nq);
+        for (j = 0; j < nq * nr; j++) Fr[j] = qe * (am->Fr[j] + Fr[j]);
+        mm(nq, NXI, ns, am->Fs, nq, Usx, ns, FR, nq);
+        for (c = 0; c < NXI; c++) {
+            if (is_urdd(c)) {
+                for (i = 0; i < nq; i++) {
                     double s = 0.0, si = 0.0;
                     for (k = 0; k < nr; k++) {
-                        s  += Fa[i + nr * k] * Ax[k + nr * c];
+                        s  += Fa[i + nq * k] * Ax[k + nr * c];
                         si += T.mr[i + 6 * k] * Ax[k + nr * c];
                     }
-                    FR[i + nr * c] = s;
-                    IR[i + nr * c] = si;
+                    FR[i + nq * c] = s;
+                    IR[i + nq * c] = si;
                 }
             } else {
-                for (i = 0; i < nr; i++)
-                    FR[i + nr * c] = q * am->Fx[i + nr * c] + qe * FR[i + nr * c];
+                for (i = 0; i < nq; i++)
+                    FR[i + nq * c] = q * am->Fx[i + nq * c] + qe * FR[i + nq * c];
             }
         }
 
         /* the trim: equilibrium of the restrained vehicle, the fixed
-         * values and the links                                            */
-        ux = DNEW(NX);
-        status = INEW(NX);
+         * values and the links; the intercept (column NX, fixed at 1)
+         * goes to the right hand side                                     */
+        ux = DNEW(NX ? NX : 1);
+        status = INEW(NX ? NX : 1);
         {
-            double *M = DNEW((size_t) NX * NX), *rhs = DNEW(NX);
-            int     row = 0, *ipm = INEW(NX);
+            double *M = DNEW((size_t) NX * NX + 1), *rhs = DNEW(NX + 1);
+            int     row = 0, *ipm = INEW(NX + 1);
             for (c = 0; c < NX; c++) status[c] = 0;
-            for (i = 0; i < nr && row < NX; i++, row++)
-                for (c = 0; c < NX; c++) M[row + (size_t) NX * c] = FR[i + nr * c] - IR[i + nr * c];
+            for (i = 0; i < nr && row < NX; i++, row++) {
+                for (c = 0; c < NX; c++) M[row + (size_t) NX * c] = FR[i + nq * c] - IR[i + nq * c];
+                rhs[row] = -FR[i + nq * NX];
+            }
             for (k = 0; k < tc->n; k++) {
                 int x = find_x(tc->lab[k]);
                 if (x < 0) {
@@ -1439,16 +1963,21 @@ static int mode2(void)
                       T.case_id[isub], tc->sid, nr, nfix, nlnk, neq, NX);
                 free(djx); return 1;
             }
-            info_ok = lu(NX, M, ipm);
+            info_ok = NX == 0 ? 1 : lu(NX, M, ipm);
             if (!info_ok) {
                 fatal(9647, "subcase %d (TRIM %d): the trim equations are singular: the\n"
-                      "free variables cannot balance the six rigid body equations\n"
-                      "(e.g. no free variable acts on one of them).",
+                      "free variables cannot balance the rigid body equations (e.g.\n"
+                      "no free variable acts on one of them).",
                       T.case_id[isub], tc->sid);
                 free(djx); return 1;
             }
             memcpy(ux, rhs, sizeof(double) * (size_t) NX);
-            lus(NX, M, ipm, ux, 1);
+            if (NX > 0) lus(NX, M, ipm, ux, 1);
+            /* a fixed variable is its TRIM value, not the solve's roundoff */
+            for (k = 0; k < tc->n; k++) {
+                int x = find_x(tc->lab[k]);
+                if (x >= 0) ux[x] = tc->ux[k] + 0.0;
+            }
             free(M); free(rhs); free(ipm);
         }
 
@@ -1457,16 +1986,17 @@ static int mode2(void)
             double ur[6] = { 0 }, *us = DNEW(ns), *y = DNEW(ns), *pk = DNEW(nk);
             for (c = 0; c < NX; c++)
                 for (i = 0; i < nr; i++) ur[i] += Ax[i + nr * c] * ux[c];
-            for (c = 0; c < NX; c++) {
-                if (X[c].kind >= 5 && X[c].kind <= 10) continue;
-                for (i = 0; i < ns; i++) us[i] += Usx[i + (size_t) ns * c] * ux[c];
+            for (c = 0; c < NXI; c++) {
+                double u = c < NX ? ux[c] : 1.0;
+                if (is_urdd(c)) continue;
+                for (i = 0; i < ns; i++) us[i] += Usx[i + (size_t) ns * c] * u;
             }
             for (k = 0; k < nr; k++)
                 for (i = 0; i < ns; i++) us[i] += Usa[i + (size_t) ns * k] * ur[k];
             /* PLA = E (q Q_sx u_x + qe Q_ss u_s)                           */
             for (i = 0; i < ns; i++) {
                 double s = 0.0;
-                for (c = 0; c < NX; c++) s += q * am->Qsx[i + (size_t) ns * c] * ux[c];
+                for (c = 0; c < NXI; c++) s += q * am->Qsx[i + (size_t) ns * c] * (c < NX ? ux[c] : 1.0);
                 for (j = 0; j < ns; j++) s += qe * am->Qss[i + (size_t) ns * j] * us[j];
                 y[i] = s;
             }
@@ -1475,7 +2005,7 @@ static int mode2(void)
             /* the k set forces at trim, and the g set loads (OLOAD)          */
             for (k = 0; k < nk; k++) {
                 double s = 0.0;
-                for (c = 0; c < NX; c++) s += q * am->Px[k + (size_t) nk * c] * ux[c];
+                for (c = 0; c < NXI; c++) s += q * am->Px[k + (size_t) nk * c] * (c < NX ? ux[c] : 1.0);
                 for (j = 0; j < ns; j++) s += qe * am->Ps[k + (size_t) nk * j] * us[j];
                 pk[k] = s;
             }
@@ -1485,7 +2015,7 @@ static int mode2(void)
                 cpk = DNEW(nj + nk);
                 for (j = 0; j < nj; j++) {
                     double s = 0.0;
-                    for (c = 0; c < NX; c++) s += am->Wx[j + (size_t) nj * c] * ux[c];
+                    for (c = 0; c < NXI; c++) s += am->Wx[j + (size_t) nj * c] * (c < NX ? ux[c] : 1.0);
                     for (i = 0; i < ns; i++) s += (qe / q) * am->Ws[j + (size_t) nj * i] * us[i];
                     cpk[j] = s;
                 }
@@ -1507,19 +2037,20 @@ static int mode2(void)
             free(us); free(y); free(pk);
         }
 
-        /* the unrestrained (mean axis) derivatives, per aero variable      */
-        Mx = DNEW((size_t) nr * NX); Mr = DNEW((size_t) nr * nr); Ma = DNEW((size_t) nr * nr);
-        UNR = DNEW((size_t) nr * NX);
-        URU = DNEW((size_t) 2 * nr * NX);
-        {
-            double *t1 = DNEW((size_t) ns * (NX > nr ? NX : nr));
+        /* the unrestrained (mean axis) derivatives, per aero variable and
+         * the intercept                                                    */
+        Mx = DNEW((size_t) nr * NXI); Mr = DNEW((size_t) nr * nr); Ma = DNEW((size_t) nr * nr);
+        UNR = DNEW((size_t) nq * NXI);
+        URU = DNEW((size_t) 2 * nr * NXI);
+        if (nr > 0) {
+            double *t1 = DNEW((size_t) ns * (NXI > nr ? NXI : nr));
             /* Mx = XM_s^T (q Q_sx + qe Q_ss Us_x)                          */
-            mm(ns, NX, ns, am->Qss, ns, Usx, ns, t1, ns);
-            for (j = 0; j < ns * NX; j++) t1[j] = q * am->Qsx[j] + qe * t1[j];
-            for (c = 0; c < NX; c++)
-                if (X[c].kind >= 5 && X[c].kind <= 10)
+            mm(ns, NXI, ns, am->Qss, ns, Usx, ns, t1, ns);
+            for (j = 0; j < ns * NXI; j++) t1[j] = q * am->Qsx[j] + qe * t1[j];
+            for (c = 0; c < NXI; c++)
+                if (is_urdd(c))
                     for (i = 0; i < ns; i++) t1[i + (size_t) ns * c] = 0.0;
-            mtm(nr, NX, ns, T.xms, ns, t1, ns, Mx, nr);
+            mtm(nr, NXI, ns, T.xms, ns, t1, ns, Mx, nr);
             /* Mr = XM_s^T qe (Q_sr + Q_ss Us_r)                            */
             mm(ns, nr, ns, am->Qss, ns, Usr, ns, t1, ns);
             for (j = 0; j < ns * nr; j++) t1[j] = qe * (am->Qsr[j] + t1[j]);
@@ -1532,7 +2063,7 @@ static int mode2(void)
                 for (i = 0; i < nr; i++) Ma[i + nr * j] -= T.mxm[i + 6 * j];
             free(t1);
         }
-        {
+        if (nr > 0) {
             /* [m_r + Mr, Ma; -Fr, m_r - Fa] [u_r; u''_r] = [-Mx; FR] u_x   */
             int    n2 = 2 * nr, ip2[12];
             double S[144], rhs2[12];
@@ -1541,18 +2072,18 @@ static int mode2(void)
                 for (j = 0; j < nr; j++) {
                     S[i + n2 * j]               = T.mr[i + 6 * j] + Mr[i + nr * j];
                     S[i + n2 * (nr + j)]        = Ma[i + nr * j];
-                    S[(nr + i) + n2 * j]        = -Fr[i + nr * j];
-                    S[(nr + i) + n2 * (nr + j)] = T.mr[i + 6 * j] - Fa[i + nr * j];
+                    S[(nr + i) + n2 * j]        = -Fr[i + nq * j];
+                    S[(nr + i) + n2 * (nr + j)] = T.mr[i + 6 * j] - Fa[i + nq * j];
                 }
             if (!lu(n2, S, ip2)) {
                 info(9648, "subcase %d: the mean axis system is singular; the\n"
                      "unrestrained derivatives are left zero.", T.case_id[isub]);
             } else {
-                for (c = 0; c < NX; c++) {
-                    if (X[c].kind >= 5 && X[c].kind <= 10) continue;
+                for (c = 0; c < NXI; c++) {
+                    if (is_urdd(c)) continue;
                     for (i = 0; i < nr; i++) {
                         rhs2[i] = -Mx[i + nr * c];
-                        rhs2[nr + i] = FR[i + nr * c];
+                        rhs2[nr + i] = FR[i + nq * c];
                     }
                     lus(n2, S, ip2, rhs2, 1);
                     for (i = 0; i < 2 * nr; i++) URU[i + 2 * nr * c] = rhs2[i];
@@ -1560,7 +2091,7 @@ static int mode2(void)
                     for (i = 0; i < nr; i++) {
                         double s = 0.0;
                         for (k = 0; k < nr; k++) s += T.mr[i + 6 * k] * rhs2[nr + k];
-                        UNR[i + nr * c] = s;
+                        UNR[i + nq * c] = s;
                     }
                 }
             }
@@ -1577,28 +2108,32 @@ static int mode2(void)
         out("");
         {
             double cols[6][6];
-            memset(cols, 0, sizeof(cols));
-            print_var_rows("REF. COEFF.", cols);
-            for (c = 0; c < NX; c++) {
+            /* the intercept (REF. COEFF.) first, then the variables       */
+            int ic;
+            for (ic = 0; ic <= NX; ic++) {
                 double fr[6];
-                int urdd = X[c].kind >= 5 && X[c].kind <= 10;
+                int urdd;
+                c = ic == 0 ? NX : ic - 1;
+                urdd = is_urdd(c);
                 memset(cols, 0, sizeof(cols));
                 if (!urdd) {
                     ref_coeffs(&am->Ux[6 * c], 1.0, cols[0]);
-                    for (i = 0; i < nr; i++) fr[i] = am->Fx[i + nr * c];
+                    for (i = 0; i < nq; i++) fr[i] = am->Fx[i + nq * c];
                     to_coeffs(fr, 1.0, cols[1]);
                 }
-                for (i = 0; i < nr; i++) fr[i] = FR[i + nr * c];
+                for (i = 0; i < nq; i++) fr[i] = FR[i + nq * c];
                 to_coeffs(fr, q, cols[2]);
                 if (!urdd) {
-                    for (i = 0; i < nr; i++) fr[i] = UNR[i + nr * c];
-                    to_coeffs(fr, q, cols[3]);
-                    to_coeffs(fr, q, cols[5]);
+                    if (nr > 0) {
+                        for (i = 0; i < nq; i++) fr[i] = UNR[i + nq * c];
+                        to_coeffs(fr, q, cols[3]);
+                        to_coeffs(fr, q, cols[5]);
+                    }
                 } else {
-                    for (i = 0; i < nr; i++) fr[i] = IR[i + nr * c];
+                    for (i = 0; i < nq; i++) fr[i] = IR[i + nq * c];
                     to_coeffs(fr, q, cols[4]);
                 }
-                print_var_rows(X[c].label, cols);
+                print_var_rows(c == NX ? "REF. COEFF." : X[c].label, cols, unr_na);
             }
         }
 
@@ -1606,6 +2141,7 @@ static int mode2(void)
         if (HM) {
             int is;
             double *fk = DNEW(nk), *tv = DNEW(ns);
+            char b1[16];
             print_header_block(tc->mach, q, 2);
             for (is = 0; is < aet_g.nsurf; is++) {
                 const double *h = HM + (size_t) is * nk;
@@ -1616,10 +2152,12 @@ static int mode2(void)
                 out("");
                 out("              TRIM VARIABLE               RIGID                             ELASTIC                            INERTIAL");
                 out("                                                                 RESTRAINED      UNRESTRAINED         RESTRAINED      UNRESTRAINED");
-                out("              %-19s%14.6E%29.6E%16.6E%21.6E%16.6E", "AT REFERENCE", 0.0, 0.0, 0.0, 0.0, 0.0);
-                for (c = 0; c < NX; c++) {
-                    int urdd = X[c].kind >= 5 && X[c].kind <= 10;
+                int ic;
+                for (ic = 0; ic <= NX; ic++) {
+                    int urdd;
                     double hr = 0.0, he = 0.0, hu = 0.0;
+                    c = ic == 0 ? NX : ic - 1;
+                    urdd = is_urdd(c);
                     /* rigid: the trim variable's box forces (per unit q)      */
                     if (!urdd) for (k = 0; k < nk; k++) hr += h[k] * am->Px[k + (size_t) nk * c] * q;
                     /* elastic restrained: with the deformation they make       */
@@ -1636,7 +2174,7 @@ static int mode2(void)
                         he += h[k] * s;
                     }
                     /* elastic unrestrained: about the mean axes                */
-                    if (!urdd) {
+                    if (!urdd && nr > 0) {
                         const double *ur = URU + 2 * nr * c, *ua = ur + nr;
                         for (i = 0; i < ns; i++) {
                             double s = Usx[i + (size_t) ns * c];
@@ -1652,8 +2190,9 @@ static int mode2(void)
                             hu += h[k] * s;
                         }
                     }
-                    out("              %-19s%14.6E%29.6E%16.6E%21.6E%16.6E", X[c].label,
-                        hr / den, he / den, hu / den, 0.0, 0.0);
+                    out("              %-19s%14.6E%29.6E   %s%21.6E%16.6E",
+                        c == NX ? "AT REFERENCE" : X[c].label,
+                        hr / den, he / den, num13(b1, hu / den, unr_na), 0.0, 0.0);
                 }
             }
             out("");
@@ -1689,15 +2228,10 @@ static int mode2(void)
         /* the load resultants at the reference point (aerodynamic,
          * inertial, sum): what balances                                     */
         {
-            double fa[6] = { 0 }, fi[6] = { 0 }, ref_a[6], ref_i[6], ur[6];
+            double fa[6] = { 0 }, fi[6] = { 0 }, ref_a[6], ref_i[6], ur[6] = { 0 };
             for (i = 0; i < nr; i++) ur[i] = T.uddt[(size_t) isub * nr + i];
-            for (c = 0; c < NX; c++) {
-                if (X[c].kind >= 5 && X[c].kind <= 10) {
-                    for (i = 0; i < nr; i++) fa[i] += FR[i + nr * c] * ux[c];
-                    continue;
-                }
-                for (i = 0; i < nr; i++) fa[i] += FR[i + nr * c] * ux[c];
-            }
+            for (c = 0; c < NXI; c++)
+                for (i = 0; i < nq; i++) fa[i] += FR[i + nq * c] * (c < NX ? ux[c] : 1.0);
             for (i = 0; i < nr; i++) {
                 double s = 0.0;
                 for (k = 0; k < nr; k++) s += T.mr[i + 6 * k] * ur[k];
@@ -1705,8 +2239,13 @@ static int mode2(void)
             }
             for (i = 0; i < 6; i++) {
                 double sa = 0.0, si = 0.0;
-                for (k = 0; k < 6; k++) { sa += T.rbr[k + 6 * i] * fa[k]; si += T.rbr[k + 6 * i] * fi[k]; }
-                ref_a[i] = sa; ref_i[i] = si;
+                if (nr > 0) {
+                    for (k = 0; k < nr; k++) { sa += T.rbr[k + 6 * i] * fa[k]; si += T.rbr[k + 6 * i] * fi[k]; }
+                } else {
+                    sa = fa[i];
+                }
+                ref_a[i] = T.smask[i] != 0.0 ? sa : 0.0;
+                ref_i[i] = T.smask[i] != 0.0 ? si : 0.0;
             }
             out("                         TRIMMED LOAD RESULTANTS ABOUT THE REFERENCE POINT, IN REFERENCE AXES");
             out("");
@@ -1751,6 +2290,18 @@ static int mode2(void)
         }
         free(Z); free(ipz); free(RHS); free(FR); free(IR); free(Fa); free(Fr);
         free(ux); free(status); free(Mx); free(Mr); free(Ma); free(UNR); free(URU);
+
+        /* a divergence analysis in the same subcase                        */
+        if (dsid >= 0) {
+            int id = div_index(dsid);
+            if (id < 0) {
+                fatal(9669, "subcase %d selects DIVERG = %d, which the deck does not define.",
+                      T.case_id[isub], dsid);
+                free(djx); return 1;
+            }
+            divergence(isub, &aet_g.div[id], AM, nmach);
+            if (T.fatal) { free(djx); return 1; }
+        }
     }
     for (im = 0; im < nmach; im++) aero_free(&AM[im]);
     free(AM);

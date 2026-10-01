@@ -787,6 +787,10 @@ static const char *copy_cards[] = {
     "FLFACT", "MKAERO1", "MKAERO2", "TRIM", "AESTAT", "AESURF",
     "GUST", "RANDPS", "TABRNDG", "TABRND1",
     "DMI", "DMIG",
+    /* HALO (SOL 144 corrections): the box divisions of a CAERO1 that
+     * names LSPAN / LCHORD, and the general element (no grid id over
+     * 2^24-1 in it is renumbered) - MSC's published examples use both */
+    "AEFACT", "GENEL",
     NULL
 };
 
@@ -1085,6 +1089,34 @@ static void translate_bulk(msc_ctx *x)
                     attach_dofs(x, msc_fi(c, 5, 0), 1 << (msc_fi(c, 6, 1) - 1));
             } else if (msc_streq(n, "SPC")) {
                 constrain_dofs(x, msc_fi(c, 2, 0), dof_mask(msc_f(c, 3)));
+            } else if (msc_streq(n, "GENEL")) {
+                /* HALO: GENEL EID - UI1 CI1 ... UD UD1 CD1 ... K|Z ...: the
+                 * general element holds every dof it names                */
+                int k2;
+                for (k2 = 3; k2 + 1 <= c->nfld; k2 += 2) {
+                    const char *f = msc_f(c, k2);
+                    if (msc_streq(f, "UD")) { k2--; continue; }
+                    if (msc_streq(f, "K") || msc_streq(f, "Z") || msc_streq(f, "S")) break;
+                    if (!*f) continue;
+                    attach_dofs(x, msc_fi(c, k2, 0), dof_mask(msc_f(c, k2 + 1)));
+                }
+            } else if (msc_streq(n, "MPC") || msc_streq(n, "SUPORT")) {
+                /* HALO: an MPC's dofs leave the f set through the m set (or
+                 * are held by it), and a SUPORT dof is the reference: the
+                 * auto-SPC must not put either in the s set (UFM 2101A)    */
+                int k2;
+                if (msc_streq(n, "SUPORT")) {
+                    for (k2 = 1; k2 + 1 <= c->nfld; k2 += 2)
+                        if (!msc_blank(c, k2))
+                            attach_dofs(x, msc_fi(c, k2, 0), dof_mask(msc_f(c, k2 + 1)));
+                } else {
+                    /* G C A at fields 2 and 5 of the first line, 2 and 5
+                     * of each continuation (its field 1 is blank)        */
+                    for (k2 = 2; k2 + 1 <= c->nfld; k2 += ((k2 - 2) % 8 == 0) ? 3 : 5) {
+                        if (msc_blank(c, k2)) continue;
+                        attach_dofs(x, msc_fi(c, k2, 0), dof_mask(msc_f(c, k2 + 1)));
+                    }
+                }
             }
             continue;
         }

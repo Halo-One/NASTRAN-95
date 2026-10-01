@@ -869,8 +869,9 @@ typedef struct {
     double *Qss, *Qsr, *Qsx;      /* G_s S A^-1 D1 G_s^T etc. (ns rows)  */
     double *Fs, *Fr, *Fx;         /* B S A^-1 ... (nr rows)              */
     double *Ux;                   /* 6 x nx, unsplined, at O, ref axes   */
-    double *Ps, *Px;              /* S A^-1 ... at the k set (k rows)    */
+    double *Ps, *Px, *Pr;         /* S A^-1 ... at the k set (k rows)    */
     double *Ws, *Wx;              /* A^-1 ...: the box pressures (j rows) */
+    double *CQss, *CQsx, *CQsr;   /* C_ss Q_ss, C_ss Q_sx, C_ss Q_sr     */
 } aero_mach;
 
 static int aero_for_mach(double mach, aero_mach *am, const double *djx)
@@ -965,7 +966,9 @@ static int aero_for_mach(double mach, aero_mach *am, const double *djx)
         free(Q); free(F);
     }
     am->Ps = DNEW((size_t) nk * ns); am->Px = DNEW((size_t) nk * nx);
+    am->Pr = DNEW((size_t) nk * nr);
     memcpy(am->Ps, P, sizeof(double) * (size_t) nk * ns);
+    memcpy(am->Pr, P + (size_t) nk * ns, sizeof(double) * (size_t) nk * nr);
     memcpy(am->Px, P + (size_t) nk * (ns + nr), sizeof(double) * (size_t) nk * nx);
 
     /* unsplined: the box forces straight to the reference point         */
@@ -991,6 +994,12 @@ static int aero_for_mach(double mach, aero_mach *am, const double *djx)
         }
     }
     am->Ux = U;
+    /* C_ss times the aerodynamics: the same for every subcase of the Mach */
+    am->CQss = DNEW((size_t) ns * ns); am->CQsx = DNEW((size_t) ns * nx);
+    am->CQsr = DNEW((size_t) ns * nr);
+    mm(ns, ns, ns, T.css, ns, am->Qss, ns, am->CQss, ns);
+    mm(ns, nx, ns, T.css, ns, am->Qsx, ns, am->CQsx, ns);
+    mm(ns, nr, ns, T.css, ns, am->Qsr, ns, am->CQsr, ns);
     free(P); free(Gs); free(B);
     return 0;
 }
@@ -999,8 +1008,47 @@ static void aero_free(aero_mach *am)
 {
     free(am->Qss); free(am->Qsr); free(am->Qsx);
     free(am->Fs); free(am->Fr); free(am->Fx);
-    free(am->Ux); free(am->Ps); free(am->Px); free(am->Ws); free(am->Wx);
+    free(am->Ux); free(am->Ps); free(am->Px); free(am->Pr); free(am->Ws); free(am->Wx);
+    free(am->CQss); free(am->CQsx); free(am->CQsr);
     memset(am, 0, sizeof(*am));
+}
+
+/* the hinge moment of each control surface per k-set force: the box
+ * forces' moments about the hinge line (the y axis of the surface's
+ * coordinate system, through its origin), nsurf x nk                   */
+static double *hinge_rows(void)
+{
+    int is, comp, li, k, nk = T.nk;
+    double *H;
+    if (aet_g.nsurf == 0) return NULL;
+    H = DNEW((size_t) aet_g.nsurf * nk);
+    for (is = 0; is < aet_g.nsurf; is++) {
+        const aet_surf *sf = &aet_g.surf[is];
+        for (comp = 0; comp < 2; comp++) {
+            double ax[9], org[3], h[3];
+            const aet_list *L = NULL;
+            if (sf->alid[comp] <= 0) continue;
+            if (!cs_axes(sf->cid[comp], ax, org)) continue;
+            for (k = 0; k < 3; k++) h[k] = ax[k + 3];
+            for (li = 0; li < aet_g.nlist; li++)
+                if (aet_g.list[li].sid == sf->alid[comp]) { L = &aet_g.list[li]; break; }
+            if (!L) continue;
+            for (li = 0; li < L->n; li++) {
+                int jb = box_index(L->ids[li]);
+                double n[3], sv[3], d[3], t[3];
+                if (jb < 0 || 2 * jb + 1 >= nk) continue;
+                n[0] = 0.0; n[1] = -T.bx_sg[jb]; n[2] = T.bx_cg[jb];
+                sv[0] = 0.0; sv[1] = T.bx_cg[jb]; sv[2] = T.bx_sg[jb];
+                d[0] = T.bx_xic[jb] + 0.25 * T.bx_dx[jb] - org[0];
+                d[1] = T.bx_ys[jb] - org[1];
+                d[2] = T.bx_zs[jb] - org[2];
+                cross(d, n, t);
+                H[(size_t) is * nk + 2 * jb]     += dot(t, h);
+                H[(size_t) is * nk + 2 * jb + 1] += dot(sv, h);
+            }
+        }
+    }
+    return H;
 }
 
 /* D_jx: the downwash of a unit value of every trim variable           */
@@ -1104,6 +1152,17 @@ static const char *sym_word(int s)
 
 static void print_header_block(double mach, double q, int recovery)
 {
+    if (recovery == 2) {
+        out("");
+        out("          N O N - D I M E N S I O N A L    H I N G E    M O M E N T    D E R I V A T I V E   C O E F F I C I E N T S");
+        out("");
+        out("");
+        out("");
+        out("                         CONFIGURATION = AEROSG2D     XY-SYMMETRY = %-10s   XZ-SYMMETRY = %s",
+            sym_word(aet_g.symxy), sym_word(aet_g.symxz));
+        out("                                         MACH = %10.4E                    Q = %10.4E", mach, q);
+        return;
+    }
     if (!recovery) {
         out("");
         out("    N O N - D I M E N S I O N A L   S T A B I L I T Y   A N D   C O N T R O L   D E R I V A T I V E   C O E F F I C I E N T S");
@@ -1193,13 +1252,15 @@ static int trim_index(int sid)
 static int mode2(void)
 {
     int ns = T.ns, nr = T.nr, nk, nj, nsub, isub, i, j, k, c, im;
-    double *djx = NULL;
+    double *djx = NULL, *HM = NULL;
     aero_mach *AM = NULL;
     int nmach = aet_g.nmach;
 
     nk = T.nk; nj = T.nj;
-    if (T.gtka.nc != nk || T.skj.nr != nk || T.skj.nc != nj || T.d1t.nr != nk ||
-        T.d1t.nc != nj) {
+    /* AMG writes SKJ once per (Mach, k) pair, NJ columns each; the
+     * doublet lattice's is geometry alone, so the first block serves     */
+    if (T.gtka.nc != nk || T.skj.nr != nk || nj <= 0 || T.skj.nc < nj ||
+        T.skj.nc % nj != 0 || T.d1t.nr != nk || T.d1t.nc != nj) {
         fatal(9632, "the aerodynamic matrices do not agree in size (GTKA %d x %d,\n"
               "SKJ %d x %d, D1JK %d x %d, NJ %d, NK %d).",
               T.gtka.nr, T.gtka.nc, T.skj.nr, T.skj.nc, T.d1t.nr, T.d1t.nc, nj, nk);
@@ -1221,8 +1282,13 @@ static int mode2(void)
         return 1;
     }
     if (build_vars()) return 1;
+    info(9650, "SOL 144: the a set has %d dofs (l %d, r %d), %d of them splined (the s\n"
+         "set); %d boxes, %d k-set dofs; %d trim variables, %d subcases, %d Mach\n"
+         "number%s.", T.na, T.nl, T.nr, T.ns, nj, nk, NX, T.ncase, aet_g.nmach,
+         aet_g.nmach == 1 ? "" : "s");
     djx = downwash();
     if (!djx) return 1;
+    HM = hinge_rows();
     blas_threads();
 
     /* the aerodynamics of each Mach                                   */
@@ -1247,6 +1313,7 @@ static int mode2(void)
         double *FR, *IR, *UNR, *ux, *Mx, *Mr, *Ma, *Fr, *Fa;
         int    *status;               /* 0 free 1 fixed 2 linked           */
         double *cpk = NULL;           /* APRES/AEROF: cp (nj), forces (nk)  */
+        double *URU = NULL;           /* unrestrained u_r, u''_r per variable */
 
         for (i = 0; i < aet_g.nsub; i++)
             if (aet_g.sub_id[i] == T.case_id[isub]) { sid = aet_g.sub_trim[i]; break; }
@@ -1274,7 +1341,7 @@ static int mode2(void)
 
         /* the restrained elastic solves on the s set                      */
         Z = DNEW((size_t) ns * ns);
-        mm(ns, ns, ns, T.css, ns, am->Qss, ns, Z, ns);
+        memcpy(Z, am->CQss, sizeof(double) * (size_t) ns * ns);
         for (j = 0; j < ns; j++)
             for (i = 0; i < ns; i++)
                 Z[i + (size_t) j * ns] = (i == j ? 1.0 : 0.0) - qe * Z[i + (size_t) j * ns];
@@ -1286,8 +1353,8 @@ static int mode2(void)
             free(Z); free(ipz); free(djx); return 1;
         }
         RHS = DNEW((size_t) ns * (NX + nr + nr));
-        mm(ns, NX, ns, T.css, ns, am->Qsx, ns, RHS, ns);
-        mm(ns, nr, ns, T.css, ns, am->Qsr, ns, RHS + (size_t) ns * NX, ns);
+        memcpy(RHS, am->CQsx, sizeof(double) * (size_t) ns * NX);
+        memcpy(RHS + (size_t) ns * NX, am->CQsr, sizeof(double) * (size_t) ns * nr);
         for (j = 0; j < ns * NX; j++) RHS[j] *= q;
         for (j = 0; j < ns * nr; j++) RHS[(size_t) ns * NX + j] *= qe;
         for (j = 0; j < ns * nr; j++) RHS[(size_t) ns * (NX + nr) + j] = -T.xms[j];
@@ -1443,6 +1510,7 @@ static int mode2(void)
         /* the unrestrained (mean axis) derivatives, per aero variable      */
         Mx = DNEW((size_t) nr * NX); Mr = DNEW((size_t) nr * nr); Ma = DNEW((size_t) nr * nr);
         UNR = DNEW((size_t) nr * NX);
+        URU = DNEW((size_t) 2 * nr * NX);
         {
             double *t1 = DNEW((size_t) ns * (NX > nr ? NX : nr));
             /* Mx = XM_s^T (q Q_sx + qe Q_ss Us_x)                          */
@@ -1487,6 +1555,7 @@ static int mode2(void)
                         rhs2[nr + i] = FR[i + nr * c];
                     }
                     lus(n2, S, ip2, rhs2, 1);
+                    for (i = 0; i < 2 * nr; i++) URU[i + 2 * nr * c] = rhs2[i];
                     /* m_r u''_r: the force on the free vehicle             */
                     for (i = 0; i < nr; i++) {
                         double s = 0.0;
@@ -1531,6 +1600,64 @@ static int mode2(void)
                 }
                 print_var_rows(X[c].label, cols);
             }
+        }
+
+        /* the hinge moment derivatives of each control surface              */
+        if (HM) {
+            int is;
+            double *fk = DNEW(nk), *tv = DNEW(ns);
+            print_header_block(tc->mach, q, 2);
+            for (is = 0; is < aet_g.nsurf; is++) {
+                const double *h = HM + (size_t) is * nk;
+                double den = q * aet_g.surf[is].crefc * aet_g.surf[is].crefs;
+                out("");
+                out("          CONTROL SURFACE = %-8s       REFERENCE CHORD LENGTH = %13.6E     REFERENCE AREA = %13.6E",
+                    aet_g.surf[is].label, aet_g.surf[is].crefc, aet_g.surf[is].crefs);
+                out("");
+                out("              TRIM VARIABLE               RIGID                             ELASTIC                            INERTIAL");
+                out("                                                                 RESTRAINED      UNRESTRAINED         RESTRAINED      UNRESTRAINED");
+                out("              %-19s%14.6E%29.6E%16.6E%21.6E%16.6E", "AT REFERENCE", 0.0, 0.0, 0.0, 0.0, 0.0);
+                for (c = 0; c < NX; c++) {
+                    int urdd = X[c].kind >= 5 && X[c].kind <= 10;
+                    double hr = 0.0, he = 0.0, hu = 0.0;
+                    /* rigid: the trim variable's box forces (per unit q)      */
+                    if (!urdd) for (k = 0; k < nk; k++) hr += h[k] * am->Px[k + (size_t) nk * c] * q;
+                    /* elastic restrained: with the deformation they make       */
+                    for (i = 0; i < ns; i++) {
+                        double s = 0.0;
+                        if (urdd) for (k = 0; k < nr; k++) s += Usa[i + (size_t) ns * k] * Ax[k + nr * c];
+                        else s = Usx[i + (size_t) ns * c];
+                        tv[i] = s;
+                    }
+                    for (k = 0; k < nk; k++) {
+                        double s = urdd ? 0.0 : q * am->Px[k + (size_t) nk * c];
+                        for (i = 0; i < ns; i++) s += qe * am->Ps[k + (size_t) nk * i] * tv[i];
+                        fk[k] = s;
+                        he += h[k] * s;
+                    }
+                    /* elastic unrestrained: about the mean axes                */
+                    if (!urdd) {
+                        const double *ur = URU + 2 * nr * c, *ua = ur + nr;
+                        for (i = 0; i < ns; i++) {
+                            double s = Usx[i + (size_t) ns * c];
+                            for (k = 0; k < nr; k++)
+                                s += Usr[i + (size_t) ns * k] * ur[k] + Usa[i + (size_t) ns * k] * ua[k];
+                            tv[i] = s;
+                        }
+                        for (k = 0; k < nk; k++) {
+                            double s = q * am->Px[k + (size_t) nk * c];
+                            int m2;
+                            for (i = 0; i < ns; i++) s += qe * am->Ps[k + (size_t) nk * i] * tv[i];
+                            for (m2 = 0; m2 < nr; m2++) s += qe * am->Pr[k + (size_t) nk * m2] * ur[m2];
+                            hu += h[k] * s;
+                        }
+                    }
+                    out("              %-19s%14.6E%29.6E%16.6E%21.6E%16.6E", X[c].label,
+                        hr / den, he / den, hu / den, 0.0, 0.0);
+                }
+            }
+            out("");
+            free(fk); free(tv);
         }
 
         /* the trim variables                                                */
@@ -1623,11 +1750,12 @@ static int mode2(void)
             free(cpk);
         }
         free(Z); free(ipz); free(RHS); free(FR); free(IR); free(Fa); free(Fr);
-        free(ux); free(status); free(Mx); free(Mr); free(Ma); free(UNR);
+        free(ux); free(status); free(Mx); free(Mr); free(Ma); free(UNR); free(URU);
     }
     for (im = 0; im < nmach; im++) aero_free(&AM[im]);
     free(AM);
     free(djx);
+    free(HM);
     return 0;
 }
 

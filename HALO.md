@@ -1450,7 +1450,12 @@ unrestrained) of each variable's largest coefficient; the inertial columns withi
 hand side; that is what AETRIM does. `N95_AELINK_SIGN=-1` reads it as
 `u_D = sum C_i u_i` instead (a warning says so).
 
-Not there yet: hinge moments, monitor points, TRIM2, AEPARM/AEDW/AEFORCE/AEPRESS,
+The hinge moment derivative tables (NON-DIMENSIONAL HINGE MOMENT DERIVATIVE
+COEFFICIENTS, per AESURF, its CREFC/CREFS) agree with Simcenter's within 4e-6 (rigid),
+3e-5 (elastic restrained) and 1.2e-5 (unrestrained). A deck's TRIM cards at several
+Machs get one AIC each (AMG's SKJ comes once per Mach-k pair; the first block serves).
+
+Not there yet: monitor points, TRIM2, AEPARM/AEDW/AEFORCE/AEPRESS,
 applied loads in a trim subcase (LOAD = n is a fatal), half models (SYMXZ), ACSID != 0,
 cylindrical/spherical displacement systems, divergence (DIVERG), and SOL 144 on the
 Windows build (the source is the same; it has not been built or run there).

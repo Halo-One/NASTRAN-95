@@ -22,6 +22,7 @@ typedef struct {                                                  /* AESURF */
     char   label[AET_LABLEN];
     int    cid[2], alid[2];   /* hinge frame and box list, two components */
     double eff;               /* effectiveness, scales the downwash       */
+    double crefc, crefs;      /* hinge moment reference chord and area    */
 } aet_surf;
 
 typedef struct { int sid; int n; int *ids; } aet_list;            /* AELIST */

@@ -186,6 +186,8 @@ int aet_bulk_card(const msc_card *c)
         s->cid[1]  = msc_fi(c, 5, 0);
         s->alid[1] = msc_fi(c, 6, 0);
         s->eff     = msc_blank(c, 7) ? 1.0 : msc_fd(c, 7, 1.0);
+        s->crefc   = msc_blank(c, 9) ? 1.0 : msc_fd(c, 9, 1.0);
+        s->crefs   = msc_blank(c, 10) ? 1.0 : msc_fd(c, 10, 1.0);
         if (*msc_f(c, 8) && !msc_streq(msc_f(c, 8), "LDW")) {
             msc_msg_at(MSC_FATAL, 9605, c,
                 "AESURF %s asks for %s: its forces would have to come from\n"

@@ -725,6 +725,15 @@ parts by their k before interpolating), K - rho V^2 / 2 Re(Q), B - rho b V
 / 2 Im(Q) / k, b = REFC / 2, at each printed root's own reduced frequency,
 gives the printed PK roots back to 1e-4 (`test_ase_plant`).
 
+Known (2026-10-01): the export needs a cold flutter run. A flutter deck
+restarted off the modes checkpoint (`restart=<modes deck>`) is a modified
+restart with a rigid-format switch, and NASTRAN executes only the DMAP
+instructions its restart tables flag; an ALTERed OUTPUT4 has no table
+entry, so the children leave empty `op4_unit*.tmp` files and the driver
+reports "no child wrote". Each child then solves the modes again (85-95 s
+on the monarch, in parallel), which is what the export costs until the
+restart flags the alter.
+
 ### The modes once: checkpoint and restart
 
 Every child of the SOL 145 driver solved the eigenproblem again - the

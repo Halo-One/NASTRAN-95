@@ -1489,6 +1489,12 @@ each, with the citations, and the validation tables are in
   geometric ones fitted to the structure's DM (pseudo-inverse, so a motion the a set
   cannot see stays out). A model with no SUPORT has no equilibrium equations and no
   unrestrained columns (N/A); its forces are summed through the g-set spline.
+- **Strip theory** (CAERO4, PAERO4 copied by the front end) for a divergence analysis
+  alone: its AJJL is the pressure operator, multiplied, not solved (AMPC's methods
+  3-7). A deck with no element stiffness (GENEL only) skips EMA as DISP 2 does; the
+  DMAP program has no PURGE list for the r-set blocks (blocks never generated read as
+  purged), which overflowed the file table (SFM 1201, 3018) on a GENEL model with no
+  SUPORT.
 - **ACSID** any rectangular system: the boxes (in ACPT, in the aerodynamic frame) are
   taken to basic for the downwash, the unsplined sums and the hinge moments.
 - **SIDES** is the sideslip angle, a rotation about V_hat x y_ref (+z_ref in the repo's
@@ -1507,7 +1513,9 @@ the AEROS is symmetric - with the deck's antisymmetric AEROS the roots are 15 % 
 so the published listing was run symmetric; HA144C (DMIJ W2GJ, no SUPORT) rigid
 columns within 4e-8 (elastic 3-10 % off: the bevelled CQUAD4 plate becomes a uniform
 CQUAD2); HA144D within 1.1e-6 (it found SIDES's sign); HA144E (5 subcases) within
-1.1e-6, trims to 6-7 digits. Synthetic: W2GJ = 0.01 on the horizontal boxes moves
+1.1e-6, trims to 6-7 digits; HA145C's BAH wing by strip theory diverges at 1419.8 ft/s
+against the guide's 1419.9 (static, from the textbook) and 1419.8 (its K-method), and
+its next two roots at 2872 and 4485 ft/s against 2873 and 4486. Synthetic: W2GJ = 0.01 on the horizontal boxes moves
 ANGLEA by exactly -0.01 and nothing else; WKK = 2 I at q is the plain deck at 2q (trims
 and displacements identical, coefficients twice); FA2J's intercept closes the trim
 balance; a typical section's divergence is K / (S c CMY_alpha) to 7 digits.

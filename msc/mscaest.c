@@ -279,6 +279,9 @@ static struct {
     /* the DLM geometry of the boxes, j order (ACPT)                    */
     double *bx_xic, *bx_dx, *bx_ys, *bx_zs, *bx_sg, *bx_cg, *bx_ee;
     int     nbox;
+    int     method_other;   /* HALO (corrections): an ACPT group of another
+                             * theory (4 strip theory): divergence only    */
+    int     n_dlm_groups;
     int    *box_id;
     /* subcases (CASECC)                                               */
     int     ncase;  int *case_id;  int *case_words;   /* 96 words each */
@@ -393,6 +396,8 @@ void n95ta0_(const int *mode)
         free(T.case_id); free(T.case_words); T.case_id = NULL; T.case_words = NULL;
         T.ncase = 0;
         T.nbox = 0;
+        T.method_other = 0;
+        T.n_dlm_groups = 0;
         T.have_css = T.have_xms = T.have_mxm = T.have_dm = T.have_mr = T.have_mdg = 0;
     }
     if (*mode == 1) { T.have_dm = 0; T.dm_nrow = T.dm_ncol = 0; }
@@ -473,11 +478,25 @@ void n95tbl_(const int *kind, const int *irec, const int *n, const int *w)
         if (nw < 5) break;
         method = w[0];
         if (method != 1) {
+            /* HALO (corrections): strip theory (CAERO4) serves a divergence
+             * analysis - its AJJL is the pressure operator itself, which
+             * AMP multiplies rather than solves; a trim needs the doublet
+             * lattice's box geometry (mode 2 says so)                    */
+            if (method == 4 && !T.n_dlm_groups && (!T.method_other || T.method_other == 4)) {
+                T.method_other = 4;
+                break;
+            }
             fatal(9620, "the aerodynamic model has a group that is not the doublet\n"
-                  "lattice (ACPT method %d). SOL 144 here takes CAERO1 panels\n"
-                  "only.", method);
+                  "lattice (ACPT method %d). SOL 144 here takes CAERO1 panels, or\n"
+                  "CAERO4 strips alone for a divergence analysis.", method);
             break;
         }
+        if (T.method_other) {
+            fatal(9620, "the aerodynamic model mixes CAERO1 panels and strip theory;\n"
+                  "SOL 144 here takes one or the other.");
+            break;
+        }
+        T.n_dlm_groups++;
         np = w[1]; nstrip = w[2]; ntp = w[3];
         base = 5;
         {
@@ -1194,7 +1213,7 @@ static int aero_for_mach(double mach, aero_mach *am, const double *djx)
         return 1;
     }
     ip = INEW(nj);
-    ok = lu(nj, A, ip);
+    ok = T.method_other ? 1 : lu(nj, A, ip);
     if (!ok) { fatal(9631, "the AIC at Mach %g is singular.", mach); free(A); free(ip); return 1; }
 
     /* the right hand sides: D1 G_s^T (ns), D1 G_a^T D_a (nr), D_jx (nx,
@@ -1253,7 +1272,16 @@ static int aero_for_mach(double mach, aero_mach *am, const double *djx)
             for (j = 0; j < nj; j++) R[j + (size_t) (ns + nr + NX) * nj] = T.wg[j];
         free(gk);
     }
-    lus(nj, A, ip, R, ncol);         /* R <- A^-1 R: the pressures     */
+    if (T.method_other) {
+        /* strip theory: AJJL is the pressure operator (AMPC's QJH =
+         * AJJ DJH, methods 3-7), A here its transpose                    */
+        double *R2 = DNEW((size_t) nj * ncol);
+        mtm(nj, ncol, nj, A, nj, R, nj, R2, nj);
+        free(R);
+        R = R2;
+    } else {
+        lus(nj, A, ip, R, ncol);     /* R <- A^-1 R: the pressures     */
+    }
     free(A); free(ip);
 
     /* P = S R (k x ncol), S stored k x j by columns                   */
@@ -1314,7 +1342,7 @@ static int aero_for_mach(double mach, aero_mach *am, const double *djx)
 
     /* unsplined: the box forces straight to the reference point         */
     U = DNEW((size_t) 6 * nx);
-    for (j = 0; j < nj && 2 * j + 1 < nk; j++) {
+    for (j = 0; j < T.nbox && j < nj && 2 * j + 1 < nk; j++) {
         const double *n = &T.bx_n[3 * j], *s = &T.bx_s[3 * j];
         double d[3], mn[3];
         int c, k2;
@@ -1763,14 +1791,29 @@ static int mode2(void)
               T.gtka.nr, T.gtka.nc, T.skj.nr, T.skj.nc, T.d1t.nr, T.d1t.nc, nj, nk);
         return 1;
     }
-    if (T.nbox != nj) {
-        fatal(9633, "ACPT describes %d boxes and AJJL %d.", T.nbox, nj);
-        return 1;
-    }
-    if (find_box_ids() != nj) {
-        fatal(9634, "the box points of the aerodynamic model (GPLA, USETA) do not\n"
-              "number NJ = %d.", nj);
-        return 1;
+    if (T.method_other) {
+        /* strip theory: no box geometry, so no trim (its D_jx) and no
+         * corrections by box; a divergence analysis needs neither        */
+        int i2, ntrim_sub = 0;
+        for (i2 = 0; i2 < aet_g.nsub; i2++) if (aet_g.sub_trim[i2] >= 0) ntrim_sub++;
+        if (ntrim_sub || aet_matrix(0) || aet_matrix(1) || aet_matrix(2)) {
+            fatal(9670, "strip theory (CAERO4) serves SOL 144's divergence analysis\n"
+                  "only: a trim and the W2GJ / FA2J / WKK corrections need the\n"
+                  "doublet lattice's boxes (CAERO1).");
+            return 1;
+        }
+        info(9671, "SOL 144: strip theory (CAERO4), %d j-set and %d k-set dofs: the\n"
+             "divergence analysis only.", nj, nk);
+    } else {
+        if (T.nbox != nj) {
+            fatal(9633, "ACPT describes %d boxes and AJJL %d.", T.nbox, nj);
+            return 1;
+        }
+        if (find_box_ids() != nj) {
+            fatal(9634, "the box points of the aerodynamic model (GPLA, USETA) do not\n"
+                  "number NJ = %d.", nj);
+            return 1;
+        }
     }
     if (!T.have_css || (nr > 0 && (!T.have_xms || !T.have_mxm || !T.have_dm || !T.have_mr))) {
         fatal(9635, "a structural matrix the trim needs was not available (CLS %d,\n"

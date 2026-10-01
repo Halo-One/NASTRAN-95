@@ -791,6 +791,7 @@ static const char *copy_cards[] = {
      * names LSPAN / LCHORD, and the general element (no grid id over
      * 2^24-1 in it is renumbered) - MSC's published examples use both */
     "AEFACT", "GENEL",
+    "CAERO4", "PAERO4",   /* strip theory: SOL 144 divergence (HA145C) */
     NULL
 };
 

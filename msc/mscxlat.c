@@ -30,6 +30,7 @@
  * fatal that names it. Silently dropping a card changes the model.
  */
 #include "msc.h"
+#include "msctrim.h"
 #include <ctype.h>
 #include <math.h>
 #include <stdlib.h>
@@ -1030,6 +1031,10 @@ static void translate_bulk(msc_ctx *x)
         /* the SOL 200 design model was consumed by the optimiser */
         if (c->dropped) continue;
 
+        /* SOL 144: the static aeroelastic cards go to the AETRIM module
+         * (msctrim.c), not to the solver                               */
+        if (aet_g.active && aet_bulk_card(c)) continue;
+
         if (msc_streq(n, "RBAR"))        { do_rigid_bar(x, c); continue; }
         if (msc_streq(n, "RBE2"))        { do_rbe2(x, c);      continue; }
         if (msc_streq(n, "CBUSH"))       { do_cbush(x, c);     continue; }
@@ -1547,11 +1552,22 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     st->rf = rf;
     strncpy(st->app, app, sizeof(st->app) - 1);
 
+    /* SOL 144 is a DMAP program around the module AETRIM (msctrim.c)  */
+    aet_reset();
+    if (rf == 144) {
+        aet_g.active = 1;
+        aet_case_scan(d);
+    }
+
     renumber_pass(&x);
     scan(&x);
     ngrid = msc_map_count(&x.grid);
     translate_bulk(&x);
     if (x.fatal) return 1;
+    if (aet_g.active) {
+        if (aet_check() || msc_nfatal()) return 1;
+        aet_emit(&x.out);
+    }
     auto_spc(&x);
 
     /* the SPC the case control selects, plus the auto-SPC set */
@@ -1581,6 +1597,15 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     fprintf(fp, "$ translated from MSC dialect by nastran95ase\n");
     fprintf(fp, "$ this file is written by the solver; edit the MSC deck, not this\n");
     fprintf(fp, "ID      HALO,ASE\n");
+    if (rf == 144) {
+        /* no rigid format: the solution is the front end's DMAP program */
+        aet_write_dmap(fp);
+        if (g_chkpnt || g_restart_dic[0])
+            msc_msg(MSC_WARN, 9465, "SOL 144 runs as a DMAP program and is not "
+                    "checkpointed; scr=no and restart= are ignored.");
+        fprintf(fp, "CEND\n");
+        goto case_control;
+    }
     fprintf(fp, "APP     %s\n", app);
     fprintf(fp, "SOL     %d,0\n", rf);
     fprintf(fp, "TIME    600\n");
@@ -1594,6 +1619,7 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     fprintf(fp, "CEND\n");
 
     /* ---- case control --------------------------------------------- */
+case_control:
     if (!d->title[0]) fprintf(fp, "TITLE = TRANSLATED MSC DECK\n");
     /* NASTRAN-95 stops a job when the print file passes 20,000 lines
      * (UFM 3019). A hundred modes on a few thousand grids is far past

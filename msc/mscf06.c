@@ -276,7 +276,7 @@ int msc_f06(const char *path)
     f6buf  b;
     char   line[F6LINE * 2];
     char   cyc[32];
-    int    i, in_vector = 0, have_cyc = 0;
+    int    i, in_vector = 0, have_cyc = 0, in_static = 0;
     int    skip_vector = 0, in_table = 0, gpwg_rows = 0;
     int    is_state = 0, is_rows = 0;      /* the I(S) block under the weights */
     int    after_enddata = 0;              /* the modes run's eigenvalue pages go here */
@@ -447,9 +447,17 @@ int msc_f06(const char *path)
             continue;
         }
 
+        /* the static tables (SOL 101, 144: DISPLACEMENT, OLOAD, SPC
+         * forces) carry the point id in the same columns as a mode's
+         * eigenvector; each page repeats the banner                    */
+        if (line[0] == '1') in_static = 0;
+        if (has(line, "D I S P L A C E M E N T   V E C T O R") ||
+            has(line, "L O A D   V E C T O R") ||
+            has(line, "F O R C E S   O F   S I N G L E")) in_static = 1;
+
         if (f6_nremap) {
             const char *k;
-            if (in_vector) unmap_field(line, 0, 14);
+            if (in_vector || in_static) unmap_field(line, 0, 14);
             else if (has(line, "-        ")) unmap_field(line, 38, 46);
             /* the XY output's curves (CURVE   ID = n, and CURVE n(c) in
              * the summary) and a SORT2 table's point (POINT-ID = n): a

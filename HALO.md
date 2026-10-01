@@ -1397,3 +1397,60 @@ returned silently, so a longer card was truncated.
 - `monarch_demo_asm1083_gustvk_h0km_eas8p5_s1` now runs to the end and matches
   Simcenter 2606: tip rms within 0.04 %, extremes within 0.3 %, correlation 0.999994.
 - The flutter, 1-cos and PSD decks print as before.
+
+## SOL 144: static aeroelastic trim
+
+COSMIC NASTRAN never had a static aeroelastic solution, so this is new rather than
+translated. [`SOL144.md`](SOL144.md) has the theory (MSC's equations, restrained and
+unrestrained, the six derivative columns), the design and the conventions; in short:
+
+- **The front end** (`msc/msctrim.c`, `msc/msctrim.h`) takes the static aeroelastic
+  cards out of the bulk data -- `AEROS`, `AESTAT`, `AESURF`, `AELIST`, `AELINK`, `TRIM`,
+  `PARAM AUNITS` -- and the case control's `TRIM = n` (and `APRES` / `AEROF`), keeps them
+  in memory for the module, and writes in their place what NASTRAN-95's aero modules
+  read: an `AERO` card from `AEROS`, `MKAERO1` at the trim Machs and k = 1e-4 (IFP
+  rejects k = 0; 1e-4 and 1e-5 give the same derivatives to 6e-7, 1e-3 is 6e-5 off),
+  and an `EIGR` no `METHOD` selects (DPD makes the tables APD reads only from a
+  dynamics pool). `SOL 144` maps to no rigid format: the deck is run as an `APP DMAP`
+  program the front end writes (`aet_write_dmap`): rigid format DISP 2's structure and
+  inertia relief sequence (RBMG1-4: KLL's factor, DM, MR), AERO 10's APD, GI and AMG,
+  then the new module twice, FBS with the structural factor around it, SDR1/SDR2/OFP.
+- **The module** `AETRIM` (`mis/aetrim.f`, its GINO side; `msc/mscaest.c`, the algebra
+  in double precision with OpenBLAS's LAPACK when the build links it). Mode 1 finds
+  the a, l and r sets, the s-set (the l dofs the spline reaches) and writes the
+  injection ES and the g-set rigid body modes DG; mode 2 does, per Mach, one LU of the
+  AIC and the aerodynamics on the s-set, and per subcase the restrained elastic solve
+  on the s-set (`(I - q C_ss Q_ss) u_s = ...`, C_ss from FBS of the structural factor),
+  the trim (`nr + nfixed + nlinks = nx`), the six derivative columns, the trim
+  variables and the loads: PLA and the support accelerations for the displacements
+  (FBS), PGT (aerodynamic minus inertial, the g-set OLOAD).
+- **NASA's code touched**, each tagged `C HALO:`:
+  - `mis/xmpldd.f`: the MPL entry of `AETRIM` takes the 20 blank words after
+    DUMMOD4, so no module after it moves (XSEM00 dispatches by MPL position).
+  - `mis/xlnkdd.f`: its link table entry (the table grows from 970 to 975 words).
+  - `mis/xsem00.f`: label 2041, the blank entry's `CONTINUE`, calls it.
+  - `mis/gi.f`: the set flags and the trailer are reset on every call. They were
+    DATA-initialised and only ever cleared, so a second GI in one run inherited the
+    first call's answer; SOL 144 calls GI twice (GTKA, then with USETA purged the
+    g-set GTKG for the OLOAD).
+- **`msc/mscf06.c`**: the print-file rewrite now restores renumbered ids (the aero
+  reference grid 99999999) in the DISPLACEMENT, LOAD and SPC force tables too, not
+  only in eigenvectors.
+
+**Checked against Simcenter Nastran 2606** (`monarch_demo_asm1083_trim.dat`, the
+two-subcase fixture `trim_derivatives_two_subcases_simcenter.f06` of VehicleDesign):
+all 15 variables x 6 coefficients x 6 columns of the stability derivative tables of
+subcases 5 and 6 agree within 6e-6 (rigid) and 2e-5 (elastic, restrained and
+unrestrained) of each variable's largest coefficient; the inertial columns within
+1e-6. 23 subcases, 5,387 grids, 2,282 boxes: 96 s on the loaded 32-thread Linux box
+(8 BLAS threads); Simcenter took 674 s on the Windows laptop.
+
+**AELINK's sign.** MSC's Quick Reference Guide (2025.1) defines the link as
+`u_D + sum C_i u_i = 0` and the DMAP Guide's ASG solves the AEL rows with a zero right
+hand side; that is what AETRIM does. `N95_AELINK_SIGN=-1` reads it as
+`u_D = sum C_i u_i` instead (a warning says so).
+
+Not there yet: hinge moments, monitor points, TRIM2, AEPARM/AEDW/AEFORCE/AEPRESS,
+applied loads in a trim subcase (LOAD = n is a fatal), half models (SYMXZ), ACSID != 0,
+cylindrical/spherical displacement systems, divergence (DIVERG), and SOL 144 on the
+Windows build (the source is the same; it has not been built or run there).

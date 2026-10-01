@@ -379,6 +379,18 @@ if(NASTRAN_LAPACK_LIBRARIES)
 else()
   set(AMPCZS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mis/ampczs/ampczs_builtin.f")
 endif()
+# HALO: SOL 144's algebra (msc/mscaest.c, the AETRIM module's dense
+# solves and products on the splined set) uses the same LAPACK when the
+# build links one, and its own partial-pivoting LU otherwise. Fenced like
+# the other optimised files: -O2, no fused multiply-add.
+if(NASTRAN_LAPACK_LIBRARIES)
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/msc/mscaest.c"
+      PROPERTIES COMPILE_DEFINITIONS "N95_LAPACK=1")
+endif()
+if(CMAKE_C_COMPILER_ID MATCHES "GNU")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/msc/mscaest.c"
+      PROPERTIES COMPILE_OPTIONS "-O2;-ffp-contract=off")
+endif()
 # ampczb.f, the built-in LU itself, is in every build: the LAPACK one
 # falls back to it with N95_AJJ_SOLVE=BUILTIN.
 set(AMPCZB_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mis/ampczs/ampczb.f")

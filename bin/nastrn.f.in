@@ -627,6 +627,14 @@ C HALO:   so; more takes a build with a larger NASTRAN_OPEN_CORE_WORDS.
      & OPEN ( 11, FILE=DSNAMES(11),STATUS='UNKNOWN')
       IF ( DSNAMES(12) .NE. 'none' )
      & OPEN ( 12, FILE=DSNAMES(12),STATUS='UNKNOWN')
+C HALO: units 13 to 21 (FTN13..FTN21) opened the same way, so that a deck
+C HALO:   can ask OUTPUT4 for more than two matrices (QHHL, MHH, KHH ...
+C HALO:   of the aero rigid formats, msc/mscop4.c). OUTPUT4's formatted
+C HALO:   path writes to an open unit and never opens one itself.
+      DO 6291 I = 13, 21
+         IF ( DSNAMES(I) .NE. 'none' )
+     &      OPEN ( I, FILE=DSNAMES(I), STATUS='UNKNOWN' )
+ 6291 CONTINUE
       IF ( DSNAMES(10) .NE. 'none' )
      & OPEN ( 10, FILE=DSNAMES(10),STATUS='UNKNOWN')
       IF ( DSNAMES(4) .NE. 'none' )

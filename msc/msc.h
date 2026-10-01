@@ -208,5 +208,6 @@ int  msc_op4_scan(msc_deck *d);
 int  msc_op4_count(void);
 void msc_op4_alter(FILE *fp, int rf);
 int  msc_op4_finish(void);
+void msc_op4_collect(const char (*child_dir)[32], const int *id, int n);
 
 #endif /* MSC_H */

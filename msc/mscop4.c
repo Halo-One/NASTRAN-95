@@ -71,6 +71,10 @@ static const struct { const char *msc, *cosmic; } dbmap[] = {
     /* the aero rigid formats (after AMP): the modal aerodynamics of
      * every (Mach, k) pair, the modal mass, damping and stiffness */
     { "QHHL", "QHHL" }, { "QHJL", "QHJL" }, { "QKHL", "QKHL" },
+    /* MSC's per-(Mach, k) matrices of its AMP loop, which a Simcenter deck
+     * writes with OUTPUT4 QHH,,,,//0/unit (appended per pair): here the
+     * whole list is one data block, written once                      */
+    { "QHH",  "QHHL" }, { "QHJ",  "QHJL" }, { "QKH",  "QKHL" },
     { "MHH",  "MHH"  }, { "KHH",  "KHH"  }, { "BHH",  "BHH"  },
     { "PHDH", "PHIDH" }, { "PHIDH", "PHIDH" },
     { NULL, NULL }

@@ -375,13 +375,15 @@ int aet_check(void)
     for (i = 0; i < aet_g.nsub; i++) {
         int found = 0;
         for (j = 0; j < aet_g.ntrim; j++) if (aet_g.trim[j].sid == aet_g.sub_trim[i]) found = 1;
-        if (!found) {
+        if (!found && aet_g.sub_trim[i] < 0) {
             msc_msg(MSC_FATAL, 9618,
-                "subcase %d selects %s TRIM set%s%s: every SOL 144 subcase needs\n"
-                "TRIM = n naming a TRIM card of the bulk data.",
-                aet_g.sub_id[i], aet_g.sub_trim[i] < 0 ? "no" : "a",
-                aet_g.sub_trim[i] < 0 ? "" : " that is not in the deck, ",
-                aet_g.sub_trim[i] < 0 ? "" : "");
+                "subcase %d selects no TRIM set: every SOL 144 subcase needs\n"
+                "TRIM = n naming a TRIM card of the bulk data.", aet_g.sub_id[i]);
+            bad = 1;
+        } else if (!found) {
+            msc_msg(MSC_FATAL, 9618,
+                "subcase %d selects TRIM = %d, and the bulk data has no TRIM %d.",
+                aet_g.sub_id[i], aet_g.sub_trim[i], aet_g.sub_trim[i]);
             bad = 1;
         }
     }

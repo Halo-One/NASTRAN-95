@@ -734,6 +734,40 @@ end wrote the restart dictionary *instead of* the alter (an `else` in
 OUTPUT4 statements and the export is byte for byte the cold run's
 (two-subcase deck, QHHL to 1e-16).
 
+### The control-surface modes in the basis, and the gust columns
+
+A deck that carries a DMI named CSMG - g-set rows, a column per control
+surface, the unit rotation of an all-moving stab about its hinge as
+VehicleDesign's `write_control_modes_dmi` writes it (the row-index
+convention of IFS2P: an integer in the data restarts the row, so only
+the surface's rows are listed) - makes the front end alter the aero rigid
+format after GKAM (statement 70): `VEC USET/VGA/*G*/*A*/*COMP*` and
+`PARTN CSMG,,VGA/CSMA,,,/1/1` take the columns to the a-set, `PARAML
+PHIDH//*TRAILER*/C,N,1/V,N,NH` and the same on CSMA read the two sizes
+off the trailers, `MATGEN ,/CPV/C,N,6/V,N,NHC/V,N,NH/V,N,NC` makes the
+column partition vector, `MERGE PHIDH,,CSMA,,CPV,/PHIDH1/1/1` puts the
+columns behind the modes and `EQUIV PHIDH1,PHIDH/ALWAYS` hands the
+widened basis to AMP (90), whose QHHL is then [QHH QHC; QCH QCC] - the
+generalized aerodynamics of the modes and of the surfaces' rotations in
+one matrix. MHH, KHH and BHH keep the modes' size, so the alter at 90
+ends with EXIT after the OUTPUT4 statements. The PARTN and MERGE
+conventions are PARTN2's table: SYM at or above zero with one vector
+purged takes the other direction whole. Checked on the two-subcase deck
+with a plunge-like column: the modes' block is the modes-only export to
+the last digit, CSMA (which OUTPUT4 can write) lands the DMI's values on
+the a-set dofs, and the column couples the out-of-plane modes and nothing
+else; the modes-only run is untouched.
+
+The gust columns come out the same way as MSC's QHJ: `PARAM GUSTAERO -1`
+in the deck (MSC's spelling, which the front end turns into NASA's +1)
+makes AMP form QHJL, and `OUTPUT4 QHJ` writes it; NASA stores the block
+as QJHL, boxes down the rows and modes across (amp.f: "QHJL IS REALLY
+QJHL"), and GUST3 multiplies it transposed by the downwash vector GUST2
+forms, w_j = cos(gamma_j) exp(-i omega (x_j - x0) / V) at the boxes'
+control points - which is what VehicleDesign's `ase_gust_column` does
+with the export. 2,282 boxes by 110 modes by 48 k is 500 MB a Mach, so
+the flutter decks ask for it only when told to.
+
 ### The modes once: checkpoint and restart
 
 Every child of the SOL 145 driver solved the eigenproblem again - the

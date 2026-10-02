@@ -77,6 +77,8 @@ static const struct { const char *msc, *cosmic; } dbmap[] = {
     { "QHH",  "QHHL" }, { "QHJ",  "QHJL" }, { "QKH",  "QKHL" },
     { "MHH",  "MHH"  }, { "KHH",  "KHH"  }, { "BHH",  "BHH"  },
     { "PHDH", "PHIDH" }, { "PHIDH", "PHIDH" },
+    /* the control-surface modes as the alter partitions them (a-set) */
+    { "CSMA", "CSMA" },
     { NULL, NULL }
 };
 
@@ -216,11 +218,43 @@ int msc_op4_scan(msc_deck *d)
 int msc_op4_count(void) { return nreq; }
 
 /* the alter, into the executive control */
-void msc_op4_alter(FILE *fp, int rf)
+void msc_op4_alter(FILE *fp, int rf, int csmodes)
 {
     int k, any = 0;
     for (k = 0; k < nreq; k++) if (reqs[k].cosmic[0]) any = 1;
-    if (!any) return;
+    if (!any && !csmodes) return;
+    if (rf == 10 && csmodes) {
+        /* the control-surface modes (DMI CSMG, g-set rows, a column per
+         * surface) joined to the modal basis after GKAM (statement 70):
+         * the g-set columns partitioned to the a-set with USET's G -> A
+         * vector, a column partition vector of NH zeros and NC ones made
+         * from the two trailers, the columns merged behind PHIDH, and the
+         * widened PHIDH handed to AMP (statement 90), whose QHHL is then
+         * [QHH QHC; QCH QCC] - the modal aerodynamics of the modes and of
+         * the surfaces' rotations in one matrix. MHH, KHH, BHH keep the
+         * modes' size, so FA1 could not follow: the alter at 90 ends with
+         * EXIT after the OUTPUT4 statements. The idioms are AERO10's own
+         * (its VEC of USETA into the D, A and E sets and its PARTN of
+         * CPHID with that vector, SYM 1, TYPE 3): SYM 1 with one vector
+         * purged takes the other direction whole, TYPE 1 real single,
+         * what the DMI and PHIDH are.                                   */
+        fprintf(fp, "ALTER   70 $\n");
+        fprintf(fp, "PARAM   //*NOP*/V,N,ALWAYS=-1 $\n");
+        fprintf(fp, "VEC     USET/VGA/*G*/*A*/*COMP* $\n");
+        fprintf(fp, "PARTN   CSMG,,VGA/CSMA,,,/1/1 $\n");
+        fprintf(fp, "PARAML  PHIDH//*TRAILER*/C,N,1/V,N,NH $\n");
+        fprintf(fp, "PARAML  CSMA//*TRAILER*/C,N,1/V,N,NC $\n");
+        fprintf(fp, "PARAM   //*ADD*/V,N,NHC/V,N,NH/V,N,NC $\n");
+        fprintf(fp, "MATGEN  ,/CPV/C,N,6/V,N,NHC/V,N,NH/V,N,NC $\n");
+        fprintf(fp, "MERGE   PHIDH,,CSMA,,CPV,/PHIDH1/1/1 $\n");
+        fprintf(fp, "EQUIV   PHIDH1,PHIDH/ALWAYS $\n");
+        if (!any) {
+            fprintf(fp, "ALTER   90 $\n");
+            fprintf(fp, "EXIT $\n");
+            fprintf(fp, "ENDALTER $\n");
+            return;
+        }
+    }
     if (rf == 3) {
         /* after SDR1, statement 77 of DISP3: PHIG and MGG both exist */
         fprintf(fp, "ALTER   77 $\n");
@@ -238,6 +272,8 @@ void msc_op4_alter(FILE *fp, int rf)
     for (k = 0; k < nreq; k++)
         if (reqs[k].cosmic[0])
             fprintf(fp, "OUTPUT4 %s,,,,//-1/%d/2 $\n", reqs[k].cosmic, reqs[k].n95unit);
+    /* the widened basis stops here: FA1 would take QHHL for the modes' */
+    if (rf == 10 && csmodes) fprintf(fp, "EXIT $\n");
     fprintf(fp, "ENDALTER $\n");
 }
 

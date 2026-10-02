@@ -206,7 +206,7 @@ int  msc_f06_get_modes(void);
 /* OUTPUT4 matrices (mscop4.c) */
 int  msc_op4_scan(msc_deck *d);
 int  msc_op4_count(void);
-void msc_op4_alter(FILE *fp, int rf);
+void msc_op4_alter(FILE *fp, int rf, int csmodes);
 int  msc_op4_finish(void);
 void msc_op4_collect(const char (*child_dir)[32], const int *id, int n);
 

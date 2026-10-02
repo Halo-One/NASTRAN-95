@@ -599,6 +599,8 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
     msc_msg_open(msg);
 
     if (msc_read(full, &d)) { msc_msg_close(); return 3; }
+    /* the OUTPUT4 files the deck asks for, to collect from the children */
+    msc_op4_scan(&d);
     n = find_subcases(&d, at, FLUT_MAXSUB);
     for (k = 0; k < n; k++) {
         const char *p = d.cases[at[k]];
@@ -726,6 +728,10 @@ int msc_sol145(const char *deck, const char *outdir, const char *stem)
          * the joined print is rewritten into MSC's, as a single run's is
          * (mds/hmsc.f): the sorted echo's title read_nastran_grids looks
          * for, the renumbered ids put back, blank lines as one space   */
+        /* the OUTPUT4 files (QHHL ...) every child left, converted into
+         * the output directory per subcase, before the print rewrite's
+         * own finish would look for them here                         */
+        msc_op4_collect((const char (*)[32]) child_dir, id, n);
         if (out && msc_f06(prt))
             msc_msg(MSC_WARN, 9454, "the joined print file %s was not rewritten into MSC's layout.", prt);
     }

@@ -151,6 +151,7 @@ before the solver sees it and the print file after the solver is done.
 | `msc/mscwrite.c` | Eight-column output. `msc_r8` tries every eight-column spelling and keeps the one that reads back closest; a number wider than eight columns is re-spelled, never cut (`-6.89e+04` cut to eight reads as -6.89: this happened, on a PBAR, and cost an eigensolve ten minutes of finding nothing); large-field cards when even that loses more than 1e-5. |
 | `msc/mscf06.c` | The print file rewritten into MSC's layout on the way out, so that a reader written against MSC output reads it: the eigenvector banner carries `CYCLES =` and the mode number where MSC puts them, exact zeros are `0.000000E+00`, the eigenvalue table has MSC's sub-banner and no blank between header and rows, the weight generator's rows sit at MSC's columns, the sorted-echo banner is spelled as MSC spells it, renumbered ids are restored, modes past the number requested are cut (FEER returns a reduced problem's worth), and no line is zero-length. |
 | `msc/mscop4.c` | `ASSIGN OUTPUT4` and the `OUTPUT4 PHG//-1/101/2` alter of the SEMODES decks become `ALTER 77` in rigid format 3 (after SDR1, where PHIG and MGG both exist; the number is from a DIAG 14 listing), FTN11.. units, and a rewrite of NASTRAN-95's formatted file into MSC's 4I8 / A8 / `1P,5E16.9` layout that `OUTPUT4_rd.m` and ZAERO read. Three traps live in that rewrite, all of them from `mis/outpt4.f` rather than from any document: the records are fixed-width Fortran output (`1X,3I13` then `1X,10E13.6` single precision, `1X,3I16` then `1X,8D16.9` double) and must be sliced at the field width, because a negative number fills its field to the edge and two adjacent negatives touch; `JJ` in a column header counts single-precision *words*, so a double-precision column announces twice the values it holds; and a column with no terms comes back with `II` zero and the previous column's words still in the unpack buffer, so it has to be read past and left out, which is also what MSC's own OUTPUT4 does with it. `N95_KEEP_OP4` in the environment keeps the raw file next to the converted one. |
+| `mis/apd.f` | The (Mach, k) list of the MKAERO1 / MKAERO2 cards is collected, sorted by Mach then k (`APDMKS`, a stable insertion sort at the end of the file) and written to the AERO data block once, and the list is printed as UIM 9457. NASA wrote the pairs card by card in sorted bulk data order, and MKAERO1 cards of one Mach set tie on every sorted field, so a k list split over several cards came out with the cards shuffled - a two-card deck put k = 1.6, 3.2 ahead of 0.01 .. 0.8 (Simcenter does the same, and does not sort). The flutter and gust interpolations never cared; the QHHL / QHJL / QKHL columns AMP writes, and the OUTPUT4 export of them, follow this list, and a reader has to know the order. PK roots unchanged to round-off. |
 | `msc/mscopt.c`, `msc/mscopt2.c`, `msc/mscopt.h` | `SOL 200`. The design model (`DESVAR`, `DVPREL1`, `DVMREL1`, `DLINK`, `DRESP1` WEIGHT/VOLUME/FREQ/EIGN/DISP/STRESS, `DCONSTR`, `DCONADD`, `DSCREEN`, `DOPTPRM`, `DESOBJ`/`DESSUB`/`DESGLB`/`ANALYSIS`), MSC's constraint normalisation, forward-difference sensitivities from child runs of this executable (`--cosmic`), convex linearisation (CONLIN) solved through its dual, move limits, hard convergence. Weight and volume are closed-form from the model. On MSC's own three-bar truss example it follows MSC's design-cycle history to within half a percent at every cycle. |
 | `msc/mscdiag.c` | The solver's fatal messages, repeated on the terminal with what they mean and what to do, in both executables. |
 | `msc/mscmsg.c`, `msc/mscmap.c`, `msc/mscutil.c`, `msc/msc.h` | Numbered messages in the solver's own three-part shape (what, where, fix; this front end's 9000 series), a per-card tally, an integer map, string helpers. |
@@ -687,6 +688,85 @@ Mach of the MKAERO1 list closest to it (NASA's default 0.0 took the
 lowest for every subcase), and the MKAERO1 / MKAERO2 lists cut to that
 Mach. A five-Mach deck's children each computed the doublet lattice and
 the solves for all five Machs and used one; they compute one now.
+
+### The order of the (Mach, k) pairs, and the OUTPUT4 of the aerodynamics
+
+Branch `halo-ase-plant`. The aero rigid formats take `ASSIGN OUTPUT4` and
+an `OUTPUT4` alter the way rigid format 3 does: the alter goes after AMP
+(statement 90 of AERO10 and AERO11), where QHHL, QHJL and QKHL (the modal,
+gust and k-set aerodynamics of every (Mach, k) pair, the pairs' blocks
+side by side), MHH, KHH, BHH and PHIDH exist; complex matrices are
+rewritten into MSC's formatted layout (types 3 and 4, real and imaginary
+pairs), units 13 to 21 are open so a deck can ask for several, and the
+SOL 145 driver converts each child's files into the output directory as
+`<name>_s<subcase>.<ext>`, so each Mach's QHHL is its own file. A deck
+written for Simcenter names the per-pair matrices of its AMP loop (`OUTPUT4
+QHH,,,,//0/101/2` under `ALTER 'AJJ0,WSKJF'`, appended per pair); the front
+end ignores the alter text and maps QHH, QHJ and QKH to the whole lists, so
+one block serves both solvers.
+
+The order of the blocks is the order of the (Mach, k) list, and NASA's APD
+wrote that list card by card in sorted bulk data order. MKAERO1 cards of
+one Mach set tie on every field the sort looks at, and the tie breaks the
+way it breaks: a deck with k = 0.01 .. 0.8 on one card and 1.6, 3.2 on a
+second got the second card's pairs first - in this solver and in
+Simcenter alike, which sorts the same way and does not reorder either.
+FA1 and the gust modules interpolate over the pairs of a Mach wherever
+they sit, so nothing in the print moved; a reader of the exported blocks
+that assumed ascending k built a plant whose roots were nothing like the
+PK roots. APD now sorts the pairs by Mach then k before it writes them and
+prints the list it used (UIM 9457), and VehicleDesign's
+`read_nastran_qhhl` takes the order off that print - and, for a Simcenter
+run, off the sorted bulk data echo, expanded card by card.
+
+The export was checked by replaying FA1's own arithmetic on it: its cubic
+spline in k through Re(Q) and Im(Q) / k (FA1PKI divides the imaginary
+parts by their k before interpolating), K - rho V^2 / 2 Re(Q), B - rho b V
+/ 2 Im(Q) / k, b = REFC / 2, at each printed root's own reduced frequency,
+gives the printed PK roots back to 1e-4 (`test_ase_plant`).
+
+A restart exports too (2026-10-01, later the same day): the children of a
+flutter deck restarted off the modes checkpoint (`restart=<modes deck>`) had
+left empty `op4_unit*.tmp` files and the driver reported "no child wrote" -
+not because the modified restart skipped the alter, but because the front
+end wrote the restart dictionary *instead of* the alter (an `else` in
+`mscxlat.c`). With both written, the restarted children execute the
+OUTPUT4 statements and the export is byte for byte the cold run's
+(two-subcase deck, QHHL to 1e-16).
+
+### The control-surface modes in the basis, and the gust columns
+
+A deck that carries a DMI named CSMG - g-set rows, a column per control
+surface, the unit rotation of an all-moving stab about its hinge as
+VehicleDesign's `write_control_modes_dmi` writes it (the row-index
+convention of IFS2P: an integer in the data restarts the row, so only
+the surface's rows are listed) - makes the front end alter the aero rigid
+format after GKAM (statement 70): `VEC USET/VGA/*G*/*A*/*COMP*` and
+`PARTN CSMG,,VGA/CSMA,,,/1/1` take the columns to the a-set, `PARAML
+PHIDH//*TRAILER*/C,N,1/V,N,NH` and the same on CSMA read the two sizes
+off the trailers, `MATGEN ,/CPV/C,N,6/V,N,NHC/V,N,NH/V,N,NC` makes the
+column partition vector, `MERGE PHIDH,,CSMA,,CPV,/PHIDH1/1/1` puts the
+columns behind the modes and `EQUIV PHIDH1,PHIDH/ALWAYS` hands the
+widened basis to AMP (90), whose QHHL is then [QHH QHC; QCH QCC] - the
+generalized aerodynamics of the modes and of the surfaces' rotations in
+one matrix. MHH, KHH and BHH keep the modes' size, so the alter at 90
+ends with EXIT after the OUTPUT4 statements. The PARTN and MERGE
+conventions are PARTN2's table: SYM at or above zero with one vector
+purged takes the other direction whole. Checked on the two-subcase deck
+with a plunge-like column: the modes' block is the modes-only export to
+the last digit, CSMA (which OUTPUT4 can write) lands the DMI's values on
+the a-set dofs, and the column couples the out-of-plane modes and nothing
+else; the modes-only run is untouched.
+
+The gust columns come out the same way as MSC's QHJ: `PARAM GUSTAERO -1`
+in the deck (MSC's spelling, which the front end turns into NASA's +1)
+makes AMP form QHJL, and `OUTPUT4 QHJ` writes it; NASA stores the block
+as QJHL, boxes down the rows and modes across (amp.f: "QHJL IS REALLY
+QJHL"), and GUST3 multiplies it transposed by the downwash vector GUST2
+forms, w_j = cos(gamma_j) exp(-i omega (x_j - x0) / V) at the boxes'
+control points - which is what VehicleDesign's `ase_gust_column` does
+with the export. 2,282 boxes by 110 modes by 48 k is 500 MB a Mach, so
+the flutter decks ask for it only when told to.
 
 ### The modes once: checkpoint and restart
 

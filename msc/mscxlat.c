@@ -1589,8 +1589,12 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
         msc_msg(MSC_INFO, 9464, "scr=no: CHKPNT YES,DISK - the problem tape and the "
                 "dictionary stay beside the print file for a restart.");
     }
+    /* a restart carries the modes run's dictionary AND the OUTPUT4 alter:
+     * the alter used to be left out of a restart (an else), so the
+     * children of a restarted flutter run wrote nothing and the export
+     * of the aerodynamics needed a cold run                            */
     if (g_restart_dic[0]) write_restart_dictionary(fp);
-    else msc_op4_alter(fp, rf);
+    msc_op4_alter(fp, rf);
     fprintf(fp, "CEND\n");
 
     /* ---- case control --------------------------------------------- */

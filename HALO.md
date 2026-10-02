@@ -768,6 +768,22 @@ control points - which is what VehicleDesign's `ase_gust_column` does
 with the export. 2,282 boxes by 110 modes by 48 k is 500 MB a Mach, so
 the flutter decks ask for it only when told to.
 
+The export is the gust response's own input: on the monarch's sea-level
+8.5 m/s von Karman PSD deck (AERO 11, with the first six analysis k added
+to the Mach 0.10 table so that nothing is interpolated below 0.6 Hz), the
+deck's equations solved outside on the exported QHHL and QJHL - QJHL
+interpolated with Im / k as ADRI does, the load q WG QJHL(k)' w(k) at
+each frequency's own k as GUST2 / GUST3 form it, the dummy DAREA force
+added to the gust load as the rigid format adds it (FRLG's PHF1 into
+GUST's PHF) - give the printed displacement and acceleration PSDs back to
+5e-5 and the rms and N0 to every printed digit (VehicleDesign's
+`compare_gust_psd`, 2026-10-02). The plunge lift from that column and from
+the plunge damping of QHHL agree to 0.01 %. Two things that comparison
+pinned down about the print: N0 is sqrt(m2 / m0) with m2 the exact second
+moment of the PSD taken linear between the frequencies (RANDOM), not the
+trapezoid of f^2 S, and MKAERO1 wants its reduced frequencies as reals -
+a whole number written as 1 is an integer to IFP and UFM 315.
+
 ### The modes once: checkpoint and restart
 
 Every child of the SOL 145 driver solved the eigenproblem again - the

@@ -147,7 +147,7 @@ before the solver sees it and the print file after the solver is done.
 | File | What |
 |---|---|
 | `msc/mscread.c` | Reads an MSC Nastran deck: small, large and free field, continuations (a line contributes eight field slots whether or not it was written -- getting this wrong moves a PBAR's I12 into the K2 column), nested `INCLUDE`s, and the `INCLUDE 'path` / `rest'` form split over two lines that this repository's writers use. |
-| `msc/mscxlat.c`, `msc/mscexec.c` | The translation. `SOL 101/103/105/107-112/145/146` to rigid formats 1/3/5/7-12 and AERO 10/11; case control with prefix-matched names and MSC-only commands dropped with what they cost named; `RBAR`/`RBE2` to `CRIGD1` (independent end chosen so that a grid on a SUPORT or SPC is never made dependent), `CBUSH`+`PBUSH` to `CELAS2` (coincident) or `CONROD` (separated, axial only), `EIGRL` to `EIGR FEER` with a shift, `PBARL` to `PBAR`, `CQUAD4`/`CTRIA3`/`PSHELL` to `CQUAD2`/`CTRIA2`/`PQUAD2` (panels thinner than 1e-6 dropped as the massless drawing aids they are), `SUPORT1` to `SUPORT`, ids above 2^24-1 renumbered everywhere they are referenced, SPC1 `THRU` expanded, and every degree of freedom nothing is attached to constrained, which is what MSC's AUTOSPC does. A card it does not know is a fatal that names it. |
+| `msc/mscxlat.c`, `msc/mscexec.c` | The translation. `SOL 101/103/105/107-112/145/146` to rigid formats 1/3/5/7-12 and AERO 10/11; case control with prefix-matched names and MSC-only commands dropped with what they cost named; `RBAR`/`RBE2` to `CRIGD1` (independent end chosen so that a grid on a SUPORT or SPC is never made dependent), `CBUSH`+`PBUSH` to `CELAS2` (coincident) or `CONROD` (separated, axial only), `EIGRL` to `EIGR FEER` with a shift, `PBARL` to `PBAR`, `CQUAD4`/`CTRIA3`/`PSHELL` to `CQUAD2`/`CTRIA2`/`PQUAD2` (panels thinner than 1e-6 dropped as the massless drawing aids they are), `SUPORT1` to `SUPORT`, ids above 2^24-1 (any MSC takes, up to 99,999,999) renumbered everywhere they are referenced, onto a block that ends at 2^24-1 and keeps their order, SPC1 `THRU` expanded, and every degree of freedom nothing is attached to constrained, which is what MSC's AUTOSPC does. A card it does not know is a fatal that names it. |
 | `msc/mscwrite.c` | Eight-column output. `msc_r8` tries every eight-column spelling and keeps the one that reads back closest; a number wider than eight columns is re-spelled, never cut (`-6.89e+04` cut to eight reads as -6.89: this happened, on a PBAR, and cost an eigensolve ten minutes of finding nothing); large-field cards when even that loses more than 1e-5. |
 | `msc/mscf06.c` | The print file rewritten into MSC's layout on the way out, so that a reader written against MSC output reads it: the eigenvector banner carries `CYCLES =` and the mode number where MSC puts them, exact zeros are `0.000000E+00`, the eigenvalue table has MSC's sub-banner and no blank between header and rows, the weight generator's rows sit at MSC's columns, the sorted-echo banner is spelled as MSC spells it, renumbered ids are restored, modes past the number requested are cut (FEER returns a reduced problem's worth), and no line is zero-length. |
 | `msc/mscop4.c` | `ASSIGN OUTPUT4` and the `OUTPUT4 PHG//-1/101/2` alter of the SEMODES decks become `ALTER 77` in rigid format 3 (after SDR1, where PHIG and MGG both exist; the number is from a DIAG 14 listing), FTN11.. units, and a rewrite of NASTRAN-95's formatted file into MSC's 4I8 / A8 / `1P,5E16.9` layout that `OUTPUT4_rd.m` and ZAERO read. Three traps live in that rewrite, all of them from `mis/outpt4.f` rather than from any document: the records are fixed-width Fortran output (`1X,3I13` then `1X,10E13.6` single precision, `1X,3I16` then `1X,8D16.9` double) and must be sliced at the field width, because a negative number fills its field to the edge and two adjacent negatives touch; `JJ` in a column header counts single-precision *words*, so a double-precision column announces twice the values it holds; and a column with no terms comes back with `II` zero and the previous column's words still in the unpack buffer, so it has to be read past and left out, which is also what MSC's own OUTPUT4 does with it. `N95_KEEP_OP4` in the environment keeps the raw file next to the converted one. |
@@ -1493,3 +1493,73 @@ returned silently, so a longer card was truncated.
 - `monarch_demo_asm1083_gustvk_h0km_eas8p5_s1` now runs to the end and matches
   Simcenter 2606: tip rms within 0.04 %, extremes within 0.3 %, correlation 0.999994.
 - The flutter, 1-cos and PSD decks print as before.
+
+## Ids up to 99,999,999: the renumbering as an ordered block
+
+Found on 2026-10-05. VehicleDesign PR #209 numbered the monarch's point masses
+`6CCGNNNN`: the grid and its CONM2 at 60,100,001 to 69,999,999, the RBAR at id +
+20,000,000. That is some 9,600 ids over 2^24-1 where there had been one (the aero
+reference grid 99999999). Simcenter ran the decks. nastran95ase stopped in the CI's
+modes run and in every flutter subcase: `UFM 2138, ELEMENT ID NO. 16777216 IS TOO
+LARGE`. GP2 holds an element id in 24 bits too (`mis/gp2.f`).
+
+**Three faults in the front end, all in `msc/`:**
+- *The springs past the limit.* A CBUSH becomes CELAS2s numbered from one above the
+  deck's highest element id. That was read after the renumbering, which had put the
+  CONM2s at the top of the range, so the springs started at 16,777,216.
+- *The order.* Ids over the limit were renumbered counting down from 16,777,215 in the
+  order the deck met them. NASTRAN sequences the degrees of freedom by grid id, so the
+  eigenvector rows, the print's POINT ID order and the OUTPUT4 `.phg` rows came out in
+  an order MSC's run does not have. A THRU range in the case control stopped meaning
+  what it said. With one such id none of this showed.
+- *The tables.* The print file's restore (`mscf06.c`) and the case control's
+  (`mscexec.c`) held 1,024 pairs and dropped the rest silently. The print would have
+  restored 1,024 of the 9,579 renumbered ids; the rest, thousands of point-mass grids
+  among them, would have kept their solver numbers.
+
+**What it does now:**
+- `renumber_pass` (`mscxlat.c`) gathers the ids over the limit first. A restart also
+  gathers the modes deck's. It sorts them and puts them on a block that ends at
+  16,777,215, in the same order. One id still lands on 16,777,215, as before.
+- The block must sit above every id the deck keeps under the limit: grids, elements, and
+  a CAERO1's boxes up to EID + NSPAN*NCHORD - 1. UFM 9305 says so when it cannot.
+- An id over 99,999,999 is UFM 9303. MSC takes none either.
+- The CBUSH springs are numbered below the block (`scan`). UFM 9304 if they would reach
+  it. A deck whose point masses moved over the limit numbers its springs lower than
+  before: that is the one difference in its print.
+- A restart's card match (`drop_cards_of_modes_run`) numbers the modes deck with this
+  deck's map, so the two decks' cards still compare equal.
+- Both restore tables are hash maps of any size. The SOL 145 driver adds the same
+  pairs once per subcase, and each key holds one pair.
+- The print restores the deck's ids in more places:
+  - every field of a sorted-echo line, not only the first (a CRIGD1's dependent grid,
+    a CONM2's grid, `PARAM GRDPNT`);
+  - the weight generator's `REFERENCE POINT`;
+  - the grid point singularity table;
+  - the grid of UWM 2015;
+  - the first id of UIM 3113.
+- In the case control, a THRU range whose ends are both renumbered ids is followed,
+  since the order is kept. UWM 9105 is now only for an end the bulk data does not have.
+
+Still not renumbered: CAERO1 box ids (with the SPLINE and AELIST references to them)
+and grids inside DMIG columns. Keep those under 2^24-1.
+
+**Checked on Linux:**
+- *Old decks.* VehicleDesign main's `monarch_demo_asm1083` decks have one id over the
+  limit. Through f28b083 and through this build they print the same, apart from the ids
+  now restored and the clock. That covers the modes run (61,337 lines) and the five-Mach
+  flutter restarted off it, five subcases joined (10,960,442 lines). Every difference is
+  one of: the echo's CRIGD1 and `PARAM GRDPNT`, the reference point, and the singularity
+  table (10 and 30 lines).
+- *The same decks shifted.* Every point-mass, rigid-bar and bungee id was moved up by
+  60,000,000, with the grids kept in order: 14,368 ids over the limit. The prints match
+  the unshifted decks to the bit outside the sorted echo, but for the line naming the
+  first spring:
+  - the vibe deck: 836,818 lines;
+  - the modes run: 40,559 lines;
+  - the restarted five-Mach flutter: 10,855,484 lines.
+  (VehicleDesign `.claude/skills/build-nastran95/scripts/shift_ids.py` makes the copy
+  and does the comparison.)
+- *PR #209's own decks.* They run: the mfp3 and monarch vibe decks, and the CI's modes
+  plus flutter restart. Against main's deck the lowest crossings move by 1.2 % or less.
+  That is PR #209's v-stab 1 attachment fix, not the numbering.

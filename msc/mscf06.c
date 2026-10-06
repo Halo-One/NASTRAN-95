@@ -184,17 +184,17 @@ void msc_f06_modes(int n) { f6_nmodes = n; }
 /* Ids the translation renumbered (above 2^24-1, see mscxlat.c) are put
  * back in the print file: the echo and every POINT ID column say the
  * number the deck used, as MSC's print file would, so that a reader
- * matching this output against MSC's by grid id finds every grid.    */
-#define F6_MAXREMAP 1024
-static int f6_remap_from[F6_MAXREMAP], f6_remap_to[F6_MAXREMAP], f6_nremap = 0;
+ * matching this output against MSC's by grid id finds every grid.
+ * Keyed by the new id, as many as the translation made: a table of
+ * 1,024 dropped the rest until 2026-10, and a deck with its point
+ * masses numbered over the limit has some 9,600. Each subcase of the
+ * SOL 145 driver's translation adds the same pairs again; a key holds
+ * one pair.                                                          */
+static msc_map f6_remap_map;
 
 void msc_f06_remap(int new_id, int old_id)
 {
-    if (f6_nremap < F6_MAXREMAP) {
-        f6_remap_from[f6_nremap] = new_id;
-        f6_remap_to[f6_nremap]   = old_id;
-        f6_nremap++;
-    }
+    msc_map_put(&f6_remap_map, new_id, old_id);
 }
 
 /* If the integer token at s[a..b) is a renumbered id, replace it with
@@ -202,8 +202,9 @@ void msc_f06_remap(int new_id, int old_id)
  * line was changed.                                                   */
 static int unmap_field(char *s, int a, int b)
 {
-    char tok[32];
-    int  i, k = 0, id, len = (int) strlen(s);
+    char      tok[32];
+    int       i, k = 0, id, len = (int) strlen(s);
+    msc_slot *m;
     if (a >= len) return 0;
     if (b > len) b = len;
     for (i = a; i < b && k < 31; i++) tok[k++] = s[i];
@@ -211,18 +212,18 @@ static int unmap_field(char *s, int a, int b)
     msc_trim(tok);
     if (!tok[0]) return 0;
     for (i = 0; tok[i]; i++) if (!isdigit((unsigned char) tok[i])) return 0;
+    if (strlen(tok) > 9) return 0;
     id = atoi(tok);
-    for (i = 0; i < f6_nremap; i++) {
-        if (f6_remap_from[i] == id) {
-            char rep[32];
-            int  n;
-            sprintf(rep, "%d", f6_remap_to[i]);
-            n = (int) strlen(rep);
-            if (n > b - a) return 0;
-            memset(s + a, ' ', (size_t) (b - a));
-            memcpy(s + b - n, rep, (size_t) n);
-            return 1;
-        }
+    m = msc_map_slot(&f6_remap_map, id, 0);
+    if (m) {
+        char rep[32];
+        int  n;
+        sprintf(rep, "%d", m->iv);
+        n = (int) strlen(rep);
+        if (n > b - a) return 0;
+        memset(s + a, ' ', (size_t) (b - a));
+        memcpy(s + b - n, rep, (size_t) n);
+        return 1;
     }
     return 0;
 }
@@ -276,7 +277,7 @@ int msc_f06(const char *path)
     f6buf  b;
     char   line[F6LINE * 2];
     char   cyc[32];
-    int    i, in_vector = 0, have_cyc = 0;
+    int    i, in_vector = 0, have_cyc = 0, in_sing = 0;
     int    skip_vector = 0, in_table = 0, gpwg_rows = 0;
     int    is_state = 0, is_rows = 0;      /* the I(S) block under the weights */
     int    after_enddata = 0;              /* the modes run's eigenvalue pages go here */
@@ -447,10 +448,34 @@ int msc_f06(const char *path)
             continue;
         }
 
-        if (f6_nremap) {
+        /* the grid point singularity table: a POINT ID column too */
+        if (has(line, "S I N G U L A R I T Y   T A B L E")) in_sing = 1;
+        else if (in_sing && (line[0] == '1' || has(line, "*** USER") ||
+                             has(line, "*** SYSTEM"))) in_sing = 0;
+
+        if (f6_remap_map.n) {
             const char *k;
-            if (in_vector) unmap_field(line, 0, 14);
-            else if (has(line, "-        ")) unmap_field(line, 38, 46);
+            if (in_vector || in_sing) unmap_field(line, 0, 14);
+            /* the weight generator's reference point (PARAM GRDPNT) and
+             * the grid of UWM 2015, EXTERNAL GRID PT. n NOT CONNECTED  */
+            else if ((k = strstr(line, "REFERENCE POINT =")) != NULL)
+                unmap_field(line, (int) (k - line) + 17, (int) (k - line) + 27);
+            else if ((k = strstr(line, "EXTERNAL GRID PT.")) != NULL)
+                unmap_field(line, (int) (k - line) + 17, (int) (k - line) + 26);
+            /* UIM 3113, EMG ... ELEMENTS STARTING WITH ID n */
+            else if ((k = strstr(line, "STARTING WITH ID")) != NULL)
+                unmap_field(line, (int) (k - line) + 16, (int) (k - line) + 26);
+            else if (has(line, "-        ")) {
+                /* the sorted echo: the card's first field, and when the
+                 * line is laid out as the echo is (its count ending at
+                 * column 21) the other eight, so that a CRIGD1's or a
+                 * CONM2's grid says the deck's number too            */
+                int f;
+                unmap_field(line, 38, 46);
+                if ((int) strlen(line) > 38 && strncmp(line + 21, "-        ", 9) == 0)
+                    for (f = 1; f < 9; f++)
+                        unmap_field(line, 38 + 8 * f, 46 + 8 * f);
+            }
             /* the XY output's curves (CURVE   ID = n, and CURVE n(c) in
              * the summary) and a SORT2 table's point (POINT-ID = n): a
              * random response's PSD of the renumbered reference grid   */

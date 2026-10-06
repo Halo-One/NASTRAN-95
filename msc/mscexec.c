@@ -206,20 +206,18 @@ static int in_names(const char *n, const char **list)
  * data. Otherwise the solver looks for a point that is not there: an XY
  * request for one stops RANDOM in RAND2 (SFM 3002, "a plot request for a
  * point that does not exist"), and a SET that names one prints nothing
- * for it.                                                             */
-#define CASE_MAXREMAP 1024
+ * for it. As many as the translation made (a table of 1,024 dropped
+ * the rest until 2026-10). The renumbering keeps the ids' order, so a
+ * THRU range whose ends are both renumbered ids still holds the same
+ * points; one bounded by an id the deck does not have is warned about. */
 #define CASE_ID_LIMIT 16777215
-static int case_old[CASE_MAXREMAP], case_new[CASE_MAXREMAP], case_nremap = 0;
+static msc_map case_remap_map;
 
-void msc_case_remap_clear(void) { case_nremap = 0; }
+void msc_case_remap_clear(void) { msc_map_free(&case_remap_map); }
 
 void msc_case_remap(int old_id, int new_id)
 {
-    if (case_nremap < CASE_MAXREMAP) {
-        case_old[case_nremap] = old_id;
-        case_new[case_nremap] = new_id;
-        case_nremap++;
-    }
+    msc_map_put(&case_remap_map, old_id, new_id);
 }
 
 /* Copy s to out with every renumbered id on its new number, and return
@@ -228,8 +226,10 @@ void msc_case_remap(int old_id, int new_id)
  * xy, only a point of an XY request counts: after the first "/" (before
  * it are the plot and vector names), followed by "(" (its components).
  * With skip_first the first id is left alone (a SET's own number).
- * *thru_big is set when a number over the limit bounds a THRU range:
- * the ids renumbered inside such a range are not followed.            */
+ * *thru_big is set when a number over the limit that the bulk data does
+ * not have bounds a THRU range: there is no new number for that end.
+ * A range between two renumbered ids holds the same points as before,
+ * since the renumbering keeps the order.                              */
 static int remap_ids(const char *s, char *out, size_t cap, int xy,
                      int skip_first, int *thru_big)
 {
@@ -247,7 +247,8 @@ static int remap_ids(const char *s, char *out, size_t cap, int xy,
                          p[-1] == '+' || p[-1] == '-'))) {
             const char *q = p, *r;
             long        v;
-            int         k, hit = -1, is_first = first;
+            int         is_first = first;
+            msc_slot   *hit = NULL;
             while (isdigit((unsigned char) *q)) q++;
             first = 0;
             if (isalpha((unsigned char) *q) || *q == '.') {
@@ -258,16 +259,17 @@ static int remap_ids(const char *s, char *out, size_t cap, int xy,
             while (*r == ' ' || *r == '\t') r++;
             v = strtol(p, NULL, 10);
             if (v > CASE_ID_LIMIT && thru_big &&
+                (v > 2147483647L || !msc_map_has(&case_remap_map, (int) v)) &&
                 (strncmp(r, "THRU", 4) == 0 || strncmp(r, "thru", 4) == 0 ||
                  (p - s >= 5 && (strncmp(p - 5, "THRU ", 5) == 0 ||
                                  strncmp(p - 5, "thru ", 5) == 0))))
                 *thru_big = 1;
-            if ((!xy || *r == '(') && !(skip_first && is_first))
-                for (k = 0; k < case_nremap; k++)
-                    if (case_old[k] == v) { hit = k; break; }
-            if (hit >= 0) {
+            if ((!xy || *r == '(') && !(skip_first && is_first) &&
+                case_remap_map.n > 0 && v <= 2147483647L)
+                hit = msc_map_slot(&case_remap_map, (int) v, 0);
+            if (hit) {
                 char buf[16];
-                int  n = sprintf(buf, "%d", case_new[hit]);
+                int  n = sprintf(buf, "%d", hit->iv);
                 if (o + (size_t) n + 1 < cap) {
                     memcpy(out + o, buf, (size_t) n);
                     o += (size_t) n;

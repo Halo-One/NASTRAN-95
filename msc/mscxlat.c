@@ -20,7 +20,11 @@
  *                        -> PQUAD2/PTRIA2.
  *   ids over 2^24-1   -> renumbered, consistently, everywhere they are
  *                        referenced. NASTRAN packs an id and a component
- *                        into one 32-bit word.
+ *                        into one 32-bit word. Any id MSC takes (up to
+ *                        99,999,999) is accepted: the ones over the limit
+ *                        become a block at the top of the 24-bit range,
+ *                        in their own order, and the print file says the
+ *                        deck's numbers again.
  *   dofs nothing is
  *   attached to       -> SPC'd, which is what MSC's AUTOSPC does. The
  *                        1970s code has no such thing and gives a
@@ -51,6 +55,7 @@
 #endif
 
 #define ID_LIMIT 16777215      /* 2^24 - 1: NASTRAN packs id*10+component */
+#define ID_MAX   99999999      /* the largest id MSC Nastran accepts      */
 
 typedef struct {
     msc_deck  *d;
@@ -65,8 +70,10 @@ typedef struct {
     msc_map    remap;     /* old id -> new id                             */
     msc_map    held;      /* grid  -> 1 when a SUPORT or SPC names it     */
     msc_stats *st;
-    int        next_big;  /* next renumbered id, counting down            */
-    int        next_eid;  /* next free element id                         */
+    int        collect;   /* renumber_ids only notes the ids it sees      */
+    int        id_floor;  /* largest id at or under the limit in the deck */
+    int        block_lo;  /* lowest renumbered id; ID_LIMIT+1 when none   */
+    int        next_eid;  /* next free element id, below block_lo         */
     int        unit_mat;  /* MAT1 with E=1, used by CBUSH -> CONROD       */
     int        spc_set;   /* the SPC set the case control selects         */
     int        auto_set;  /* set id the auto-SPC is written into          */
@@ -82,21 +89,36 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 /* ids                                                                 */
 
-/* Renumber one id field if it is over the limit, remembering the
- * mapping so that every reference to it lands on the same new number. */
+/* One id field. Collecting (renumber_pass, first sweep): an id over the
+ * limit is noted for renumbering, one under it raises the floor the
+ * renumbered block must stay above. Rewriting (second sweep): an id
+ * over the limit goes on its new number, so every reference to it lands
+ * on the same one.                                                    */
 static void small_id(msc_ctx *x, msc_card *c, int i)
 {
     const char *s = msc_f(c, i);
     long        v;
     char        buf[32];
+    msc_slot   *m;
     if (!*s || !msc_isnum(s)) return;
     v = strtol(s, NULL, 10);
-    if (v <= ID_LIMIT) return;
-    if (!msc_map_has(&x->remap, (int) v)) {
-        msc_map_put(&x->remap, (int) v, x->next_big--);
-        x->st->renumbered++;
+    if (x->collect) {
+        if (v > ID_MAX) {
+            msc_msg_at(MSC_FATAL, 9303, c,
+                "%s field %d is %ld. MSC Nastran takes identification numbers\n"
+                "up to %d, and so does this front end.", c->name, i, v, ID_MAX);
+            x->fatal = 1;
+        } else if (v > ID_LIMIT) {
+            if (!msc_map_has(&x->remap, (int) v)) msc_map_put(&x->remap, (int) v, 0);
+        } else if (v > x->id_floor) {
+            x->id_floor = (int) v;
+        }
+        return;
     }
-    sprintf(buf, "%d", msc_map_get(&x->remap, (int) v, 0));
+    if (v <= ID_LIMIT || v > ID_MAX) return;
+    m = msc_map_slot(&x->remap, (int) v, 0);
+    if (!m) return;
+    sprintf(buf, "%d", m->iv);
     msc_set(c, i, buf);
 }
 
@@ -292,10 +314,14 @@ static void scan(msc_ctx *x)
         }
 
         /* the next free element id, so that a CBUSH can become several
-         * CELAS2s without colliding with anything the deck already has */
+         * CELAS2s without colliding with anything the deck already has.
+         * The renumbered block (renumber_pass) is left out: it ends at
+         * the limit, and a spring numbered past it is UFM 2138, ELEMENT
+         * ID TOO LARGE - which every point mass numbered over the limit
+         * caused before, its CONM2 renumbered to the top of the range  */
         if (n[0] == 'C') {
             int eid = msc_fi(c, 1, 0);
-            if (eid >= x->next_eid) x->next_eid = eid + 1;
+            if (eid < x->block_lo && eid >= x->next_eid) x->next_eid = eid + 1;
         }
     }
     if (x->next_eid < 1) x->next_eid = 1;
@@ -429,6 +455,17 @@ static void do_cbush(msc_ctx *x, msc_card *c)
         for (j = 0; j < 6; j++) {
             msc_card *o;
             if (k[j] == 0.0) continue;
+            if (x->next_eid >= x->block_lo) {
+                if (!x->fatal)
+                    msc_msg_at(MSC_FATAL, 9304, c,
+                        "CBUSH %d needs a new element id for each of its springs,\n"
+                        "and none is left: the deck's elements reach %d and the\n"
+                        "ids renumbered from over %d start at %d.\n"
+                        "FIX   Number the deck's elements lower.",
+                        eid, x->next_eid - 1, ID_LIMIT, x->block_lo);
+                x->fatal = 1;
+                return;
+            }
             o = emit(x, "CELAS2");
             msc_seti(o, 1, x->next_eid++);
             msc_setd(o, 2, k[j]);
@@ -991,18 +1028,107 @@ static void do_suport1(msc_ctx *x, msc_card *c);
  * model tables are built, or the tables are keyed by the old number
  * and every later lookup misses -- which is not a crash, it is a
  * reference grid that quietly looks unattached and gets constrained.
+ *
+ * Every id over the limit is gathered first, sorted, and given a block
+ * of numbers that ends at the limit, in the same order: the largest
+ * stays the largest. The order matters as much as the range. NASTRAN
+ * sequences the degrees of freedom by grid id, so a renumbering that
+ * scrambled them (this pass counted down in deck order until 2026-10)
+ * puts the eigenvector rows, the print's POINT ID order and the OUTPUT4
+ * .phg rows in an order MSC's run of the same deck does not have, and
+ * a THRU range in the case control stops meaning what it said. With
+ * one id over the limit (the aero reference grid) the block is that id
+ * on 16777215, as before.
+ *
+ * The block has to sit above every id the deck keeps (grids, elements,
+ * the CAERO1 boxes), and the springs a CBUSH becomes are numbered below
+ * it (scan, do_cbush). A deck point masses numbered 6CCGNNNN gives some
+ * 9,600 ids over the limit, which the block holds with 16.7 million to
+ * spare. A restart (restart=) gathers the modes deck's ids as well, and
+ * its card match (drop_cards_of_modes_run) is numbered from this map,
+ * so the two decks' cards are numbered alike.
  */
-static void renumber_pass(msc_ctx *x)
+static int cmp_int(const void *a, const void *b)
+{
+    int p = *(const int *) a, q = *(const int *) b;
+    return (p > q) - (p < q);
+}
+
+/* the ids of one deck: over the limit into remap, under it into id_floor */
+static void collect_ids(msc_ctx *x, msc_deck *d)
 {
     int i;
+    x->collect = 1;
+    for (i = 0; i < d->nbulk; i++) {
+        msc_card *c = &d->bulk[i];
+        renumber_ids(x, c);
+        /* every element id, renumbered by this pass or not, and a
+         * CAERO1's boxes (EID to EID + NSPAN*NCHORD - 1)              */
+        if (c->name[0] == 'C') {
+            int eid = msc_fi(c, 1, 0), last = eid;
+            if (msc_streq(c->name, "CAERO1"))
+                last = eid + msc_fi(c, 4, 0) * msc_fi(c, 5, 0) - 1;
+            if (last < eid) last = eid;
+            if (eid <= ID_LIMIT && last > x->id_floor)
+                x->id_floor = last > ID_LIMIT ? ID_LIMIT : last;
+        }
+    }
+    x->collect = 0;
+}
+
+/* the gathered ids, sorted, onto the block that ends at the limit */
+static void assign_ids(msc_ctx *x)
+{
+    int  n = msc_map_count(&x->remap), iter = 0, key, val, i = 0;
+    int *ids;
+    x->block_lo = ID_LIMIT + 1;
+    if (n == 0) return;
+    ids = (int *) msc_alloc((size_t) n * sizeof(int));
+    while (msc_map_next(&x->remap, &iter, &key, &val) && i < n) ids[i++] = key;
+    qsort(ids, (size_t) i, sizeof(int), cmp_int);
+    x->block_lo = ID_LIMIT - n + 1;
+    if (x->block_lo <= x->id_floor) {
+        msc_msg(MSC_FATAL, 9305,
+            "%d identification numbers are over %d, and the deck's own ids\n"
+            "reach %d. They are renumbered into a block that ends at %d and\n"
+            "keeps their order, and %d of them do not fit above the deck's.\n"
+            "FIX   Number the deck's grids and elements lower, or use fewer\n"
+            "      ids over %d.", n, ID_LIMIT, x->id_floor, ID_LIMIT,
+            x->id_floor - x->block_lo + 1, ID_LIMIT);
+        x->fatal = 1;
+    }
+    for (i = 0; i < n; i++) msc_map_put(&x->remap, ids[i], x->block_lo + i);
+    x->st->renumbered = n;
+    free(ids);
+}
+
+/* also: a second deck whose ids are numbered with this one's (the modes
+ * deck of a restart). from: take another translation's numbering as it
+ * is (that restart's card match) instead of working one out.          */
+static void renumber_pass(msc_ctx *x, msc_deck *also, msc_ctx *from)
+{
+    int i;
+    if (from) {
+        int iter = 0, key, val;
+        while (msc_map_next(&from->remap, &iter, &key, &val))
+            msc_map_put(&x->remap, key, val);
+        x->id_floor = from->id_floor;
+        x->block_lo = from->block_lo;
+    } else {
+        collect_ids(x, x->d);
+        if (also) collect_ids(x, also);
+        assign_ids(x);
+    }
     for (i = 0; i < x->d->nbulk; i++) renumber_ids(x, &x->d->bulk[i]);
-    if (x->st->renumbered)
+    if (x->st->renumbered && !from)
         msc_msg(MSC_INFO, 9302,
             "%d identification number%s above %d had to be renumbered: "
             "NASTRAN\npacks an id and a component into one 32-bit word. "
-            "Every reference to\nthem moved with them; the translated deck "
-            "shows the numbers used.",
-            x->st->renumbered, x->st->renumbered == 1 ? "" : "s", ID_LIMIT);
+            "Every reference to\nthem moved with them, in their own order, "
+            "onto %d-%d; the\ntranslated deck shows the numbers used and "
+            "the print file the\ndeck's.",
+            x->st->renumbered, x->st->renumbered == 1 ? "" : "s", ID_LIMIT,
+            x->block_lo, ID_LIMIT);
 }
 
 static void translate_bulk(msc_ctx *x)
@@ -1376,9 +1502,11 @@ static unsigned long card_hash(const msc_card *c, char *buf, size_t len)
  * written: NASTRAN takes them from the old problem tape, and a card
  * given again is a change it would act on. Compared as the translated
  * cards (the same translation of the same deck lines gives the same
- * numbering), through a hash set of the modes deck's                  */
-static void drop_cards_of_modes_run(msc_list *out)
+ * numbering: the ids over the limit take this deck's map, x's), through
+ * a hash set of the modes deck's                                      */
+static void drop_cards_of_modes_run(msc_ctx *x)
 {
+    msc_list *out = &x->out;
     msc_deck  md;
     msc_stats st;
     msc_ctx   y;
@@ -1393,7 +1521,6 @@ static void drop_cards_of_modes_run(msc_list *out)
     memset(&y, 0, sizeof(y));
     y.d = &md;
     y.st = &st;
-    y.next_big = ID_LIMIT;
     y.unit_mat = 9990;
     y.auto_set = 9998;
     y.shift = 0.5;
@@ -1408,11 +1535,12 @@ static void drop_cards_of_modes_run(msc_list *out)
     msc_map_init(&y.remap, 256);
     msc_map_init(&y.held, 256);
     msc_msg_quiet(1);
-    renumber_pass(&y);
+    renumber_pass(&y, NULL, x);
     scan(&y);
     translate_bulk(&y);
     auto_spc(&y);
     msc_msg_quiet(0);
+    msc_map_free(&y.remap);
 
     /* the hash set of the modes deck's cards (open addressing) */
     n = y.out.n;
@@ -1508,7 +1636,6 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     memset(&x, 0, sizeof(x));
     x.d = d;
     x.st = st;
-    x.next_big = ID_LIMIT;
     x.unit_mat = 9990;
     x.auto_set = 9998;
     x.shift = 0.5;
@@ -1547,7 +1674,19 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     st->rf = rf;
     strncpy(st->app, app, sizeof(st->app) - 1);
 
-    renumber_pass(&x);
+    {
+        /* a restart's modes deck has its ids numbered with this one's */
+        msc_deck rd;
+        int      have_rd = 0;
+        if (g_restart_deck[0]) {
+            msc_msg_quiet(1);
+            have_rd = msc_read(g_restart_deck, &rd) == 0;
+            msc_msg_quiet(0);
+        }
+        renumber_pass(&x, have_rd ? &rd : NULL, NULL);
+        if (have_rd) msc_free(&rd);
+    }
+    if (x.fatal) return 1;
     scan(&x);
     ngrid = msc_map_count(&x.grid);
     translate_bulk(&x);
@@ -1643,7 +1782,7 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     fprintf(fp, "BEGIN BULK\n");
 
     /* ---- bulk data ------------------------------------------------- */
-    if (g_restart_deck[0]) drop_cards_of_modes_run(&x.out);
+    if (g_restart_deck[0]) drop_cards_of_modes_run(&x);
     for (i = 0; i < x.out.n; i++) msc_write_card(fp, &x.out.c[i]);
     /* the unit-modulus material a translated CBUSH rod refers to (a
      * restart has it from the modes run)                              */

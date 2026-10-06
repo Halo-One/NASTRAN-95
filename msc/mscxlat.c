@@ -1728,8 +1728,28 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
         msc_msg(MSC_INFO, 9464, "scr=no: CHKPNT YES,DISK - the problem tape and the "
                 "dictionary stay beside the print file for a restart.");
     }
+    /* a restart carries the modes run's dictionary AND the OUTPUT4 alter:
+     * the alter used to be left out of a restart (an else), so the
+     * children of a restarted flutter run wrote nothing and the export
+     * of the aerodynamics needed a cold run                            */
     if (g_restart_dic[0]) write_restart_dictionary(fp);
-    else msc_op4_alter(fp, rf);
+    {
+        /* a DMI named CSMG in a SOL 145 deck: the control-surface modes
+         * (g-set columns) to append to the modal basis for AMP, so that
+         * QHHL comes out as [QHH QHC; QCH QCC] (write_control_modes_dmi
+         * in VehicleDesign); the alter is in msc_op4_alter             */
+        int csmodes = 0, ic;
+        for (ic = 0; ic < d->nbulk; ic++) {
+            const msc_card *c = &d->bulk[ic];
+            if (!c->dropped && msc_streq(c->name, "DMI") && c->nfld > 1 &&
+                msc_streq(msc_f(c, 1), "CSMG")) csmodes = 1;
+        }
+        if (csmodes && rf != 10)
+            msc_msg(MSC_WARN, 9135, "DMI CSMG (control-surface modes) is only acted on "
+                    "in SOL 145 (rigid format 10); this deck's rigid format %d leaves it "
+                    "unused.", rf);
+        msc_op4_alter(fp, rf, csmodes && rf == 10);
+    }
     fprintf(fp, "CEND\n");
 
     /* ---- case control --------------------------------------------- */

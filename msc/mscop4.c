@@ -31,9 +31,13 @@
  *      4I8 headers, an A8 name, the format string, 3I8 column headers
  *      and 1P,5E16.9 data. So the file is rewritten on the way out.
  *
- * Only rigid format 3 is wired, because that is what the repository
- * asks for; another rigid format's statement numbers would be looked
- * up the same way.
+ * Rigid format 3 is wired after SDR1 (statement 77), and the aero rigid
+ * formats 10 (SOL 145) and 11 (SOL 146) after AMP (statement 90 in both,
+ * from the DMAP listing a run prints): there QHHL (the generalized
+ * aerodynamic matrix of every (Mach, k) pair of the MKAERO cards, the
+ * pairs' blocks side by side), QHJL, QKHL, MHH, KHH, BHH and PHIDH all
+ * exist, which is what a state-space (aeroservoelastic) plant is built
+ * from. Complex matrices are rewritten too (QHHL is one).
  */
 #include "msc.h"
 #include <ctype.h>
@@ -64,6 +68,17 @@ static const struct { const char *msc, *cosmic; } dbmap[] = {
     { "MGG",  "MGG"  }, { "KGG",  "KGG"  },
     { "PHA",  "PHIA" }, { "PHIA", "PHIA" },
     { "MAA",  "MAA"  }, { "KAA",  "KAA"  },
+    /* the aero rigid formats (after AMP): the modal aerodynamics of
+     * every (Mach, k) pair, the modal mass, damping and stiffness */
+    { "QHHL", "QHHL" }, { "QHJL", "QHJL" }, { "QKHL", "QKHL" },
+    /* MSC's per-(Mach, k) matrices of its AMP loop, which a Simcenter deck
+     * writes with OUTPUT4 QHH,,,,//0/unit (appended per pair): here the
+     * whole list is one data block, written once                      */
+    { "QHH",  "QHHL" }, { "QHJ",  "QHJL" }, { "QKH",  "QKHL" },
+    { "MHH",  "MHH"  }, { "KHH",  "KHH"  }, { "BHH",  "BHH"  },
+    { "PHDH", "PHIDH" }, { "PHIDH", "PHIDH" },
+    /* the control-surface modes as the alter partitions them (a-set) */
+    { "CSMA", "CSMA" },
     { NULL, NULL }
 };
 
@@ -161,7 +176,8 @@ int msc_op4_scan(msc_deck *d)
                         msc_msg(MSC_FATAL, 9122,
                             "OUTPUT4 of %s: this front end does not know what\n"
                             "NASTRAN-95 calls that data block. It knows PHG (the\n"
-                            "g-set mode shapes), MGG, KGG, PHA, MAA and KAA.\n"
+                            "g-set mode shapes), MGG, KGG, PHA, MAA, KAA and, in the\n"
+                            "aero rigid formats, QHHL, QHJL, QKHL, MHH, KHH, BHH, PHDH.\n"
                             "FIX   Ask for one of those, or add the name to mscop4.c.",
                             db);
                 }
@@ -202,22 +218,62 @@ int msc_op4_scan(msc_deck *d)
 int msc_op4_count(void) { return nreq; }
 
 /* the alter, into the executive control */
-void msc_op4_alter(FILE *fp, int rf)
+void msc_op4_alter(FILE *fp, int rf, int csmodes)
 {
     int k, any = 0;
     for (k = 0; k < nreq; k++) if (reqs[k].cosmic[0]) any = 1;
-    if (!any) return;
-    if (rf != 3) {
+    if (!any && !csmodes) return;
+    if (rf == 10 && csmodes) {
+        /* the control-surface modes (DMI CSMG, g-set rows, a column per
+         * surface) joined to the modal basis after GKAM (statement 70):
+         * the g-set columns partitioned to the a-set with USET's G -> A
+         * vector, a column partition vector of NH zeros and NC ones made
+         * from the two trailers, the columns merged behind PHIDH, and the
+         * widened PHIDH handed to AMP (statement 90), whose QHHL is then
+         * [QHH QHC; QCH QCC] - the modal aerodynamics of the modes and of
+         * the surfaces' rotations in one matrix. MHH, KHH, BHH keep the
+         * modes' size, so FA1 could not follow: the alter at 90 ends with
+         * EXIT after the OUTPUT4 statements. The idioms are AERO10's own
+         * (its VEC of USETA into the D, A and E sets and its PARTN of
+         * CPHID with that vector, SYM 1, TYPE 3): SYM 1 with one vector
+         * purged takes the other direction whole, TYPE 1 real single,
+         * what the DMI and PHIDH are.                                   */
+        fprintf(fp, "ALTER   70 $\n");
+        fprintf(fp, "PARAM   //*NOP*/V,N,ALWAYS=-1 $\n");
+        fprintf(fp, "VEC     USET/VGA/*G*/*A*/*COMP* $\n");
+        fprintf(fp, "PARTN   CSMG,,VGA/CSMA,,,/1/1 $\n");
+        fprintf(fp, "PARAML  PHIDH//*TRAILER*/C,N,1/V,N,NH $\n");
+        fprintf(fp, "PARAML  CSMA//*TRAILER*/C,N,1/V,N,NC $\n");
+        fprintf(fp, "PARAM   //*ADD*/V,N,NHC/V,N,NH/V,N,NC $\n");
+        fprintf(fp, "MATGEN  ,/CPV/C,N,6/V,N,NHC/V,N,NH/V,N,NC $\n");
+        fprintf(fp, "MERGE   PHIDH,,CSMA,,CPV,/PHIDH1/1/1 $\n");
+        fprintf(fp, "EQUIV   PHIDH1,PHIDH/ALWAYS $\n");
+        if (!any) {
+            fprintf(fp, "ALTER   90 $\n");
+            fprintf(fp, "EXIT $\n");
+            fprintf(fp, "ENDALTER $\n");
+            return;
+        }
+    }
+    if (rf == 3) {
+        /* after SDR1, statement 77 of DISP3: PHIG and MGG both exist */
+        fprintf(fp, "ALTER   77 $\n");
+    } else if (rf == 10 || rf == 11) {
+        /* after AMP, statement 90 of AERO10 and of AERO11: QHHL, QHJL,
+         * QKHL (the modal aerodynamics of every (Mach, k) pair), MHH, KHH,
+         * BHH (GKAM, statement 70) and PHIDH all exist                 */
+        fprintf(fp, "ALTER   90 $\n");
+    } else {
         msc_msg(MSC_WARN, 9125,
-            "OUTPUT4 is wired for rigid format 3 (SOL 103) only; this deck's\n"
-            "rigid format %d gets no matrix output.", rf);
+            "OUTPUT4 is wired for rigid formats 3 (SOL 103), 10 (SOL 145) and\n"
+            "11 (SOL 146) only; this deck's rigid format %d gets no matrix output.", rf);
         return;
     }
-    /* after SDR1, statement 77 of DISP3: PHIG and MGG both exist */
-    fprintf(fp, "ALTER   77 $\n");
     for (k = 0; k < nreq; k++)
         if (reqs[k].cosmic[0])
             fprintf(fp, "OUTPUT4 %s,,,,//-1/%d/2 $\n", reqs[k].cosmic, reqs[k].n95unit);
+    /* the widened basis stops here: FA1 would take QHHL for the modes' */
+    if (rf == 10 && csmodes) fprintf(fp, "EXIT $\n");
     fprintf(fp, "ENDALTER $\n");
 }
 
@@ -251,7 +307,7 @@ static int read_values(FILE *fp, double *v, int n, int width)
     return got;
 }
 
-static int convert_one(const op4_req *r)
+static int convert_file(const op4_req *r, const char *temp, const char *file, int quiet)
 {
     FILE  *in, *out;
     char   line[512];
@@ -259,11 +315,13 @@ static int convert_one(const op4_req *r)
     char   name[16];
     int    k, width;
 
-    in = fopen(r->temp, "r");
+    in = fopen(temp, "r");
     if (!in) {
-        msc_msg(MSC_WARN, 9126,
-            "NASTRAN-95 wrote no %s for OUTPUT4 %s; the run probably stopped\n"
-            "before statement 77 of the rigid format.", r->temp, r->db);
+        if (!quiet)
+            msc_msg(MSC_WARN, 9126,
+                "NASTRAN-95 wrote no %s for OUTPUT4 %s; the run probably stopped\n"
+                "before the alter's statement of the rigid format, or the data\n"
+                "block does not exist in this rigid format.", temp, r->db);
         return 1;
     }
     /* header: 1X,4I13,5X,2A4 */
@@ -271,17 +329,17 @@ static int convert_one(const op4_req *r)
     if (sscanf(line, "%ld %ld %ld %ld %15s", &nc, &nr, &form, &type, name) < 4) {
         fclose(in);
         msc_msg(MSC_WARN, 9127, "%s: not an OUTPUT4 file this reader understands",
-                r->temp);
+                temp);
         return 1;
     }
     /* NASTRAN-95 flags a symmetric matrix with a negative form; MSC's
      * reader wants 1 (square), 2 (rectangular) or 6 (symmetric)      */
     form = labs(form);
     if (form != 1 && form != 2 && form != 6) form = 2;
-    if (type != 1 && type != 2) {
+    if (type < 1 || type > 4) {
         fclose(in);
-        msc_msg(MSC_WARN, 9128, "%s: %s is complex (type %ld); only real "
-                "matrices are rewritten.", r->temp, r->db, type);
+        msc_msg(MSC_WARN, 9128, "%s: %s has type %ld; only types 1 to 4 (real "
+                "and complex, single and double) are rewritten.", temp, r->db, type);
         return 1;
     }
     /* The mode shapes: FEER finds and keeps more roots than the deck
@@ -295,22 +353,28 @@ static int convert_one(const op4_req *r)
             (msc_streq(r->cosmic, "PHIG") || msc_streq(r->cosmic, "PHIA"))) {
             msc_msg(MSC_INFO, 9131, "%s: %ld modes kept of the %ld the "
                     "eigensolver returned, to match the print file.",
-                    r->file, want, nc);
+                    file, want, nc);
             nc = want;
         }
     }
-    out = fopen(r->file, "w");
+    out = fopen(file, "w");
     if (!out) {
         fclose(in);
-        msc_msg(MSC_WARN, 9129, "cannot write %s", r->file);
+        msc_msg(MSC_WARN, 9129, "cannot write %s", file);
         return 1;
     }
-    /* MSC: NCOL NROW FORM TYPE (4I8) NAME (A8) then the format          */
-    fprintf(out, "%8ld%8ld%8ld%8ld%-8s1P,5E16.9\n", nc, nr, form, 2L, r->db);
+    /* MSC: NCOL NROW FORM TYPE (4I8) NAME (A8) then the format. The
+     * values are rewritten with nine digits whatever their precision,
+     * so real goes out as type 2 and complex as type 4; a complex
+     * column's values are real, imaginary pairs, the count the number
+     * of values (OUTPUT4_rd pairs them)                               */
+    fprintf(out, "%8ld%8ld%8ld%8ld%-8s1P,5E16.9\n", nc, nr, form,
+            (type == 3 || type == 4) ? 4L : 2L, r->db);
 
     /* the value field width, from outpt4.f's own formats: single
-     * precision 1X,10E13.6 and double 1X,8D16.9                      */
-    width = (type == 2) ? 16 : 13;
+     * precision (real type 1, complex type 3) 1X,10E13.6 and double
+     * (types 2 and 4) 1X,8D16.9                                       */
+    width = (type == 2 || type == 4) ? 16 : 13;
 
     for (;;) {
         double *vals;
@@ -335,7 +399,7 @@ static int convert_one(const op4_req *r)
          * grows a spurious row-1 entry per empty degree of freedom). */
         if (ir == 0) {
             double *skip;
-            long    ns = (type == 2) ? nw / 2 : nw;
+            long    ns = (type == 2 || type == 4) ? nw / 2 : nw;
             if (ns > 0) {
                 skip = (double *) msc_alloc((size_t) ns * sizeof(double));
                 if (read_values(in, skip, (int) ns, width) != ns) {
@@ -349,14 +413,14 @@ static int convert_one(const op4_req *r)
         /* NASTRAN-95's third word is the length in single-precision
          * WORDS (outpt4.f: "NW is based on S.P. word count"), so a
          * double-precision column announces twice the values it holds;
-         * MSC's is the number of values                               */
-        if (type == 2) nw /= 2;
+         * MSC's is the number of values (a complex value being two)  */
+        if (type == 2 || type == 4) nw /= 2;
         vals = (double *) msc_alloc((size_t) (nw > 0 ? nw : 1) * sizeof(double));
         if (read_values(in, vals, (int) nw, width) != nw) {
             free(vals);
             msc_msg(MSC_WARN, 9132,
                 "%s: %s ends inside column %ld; the matrix is written short.",
-                r->file, r->db, ic);
+                file, r->db, ic);
             break;
         }
         fprintf(out, "%8ld%8ld%8ld\n", ic, ir, nw);
@@ -368,16 +432,66 @@ static int convert_one(const op4_req *r)
     }
     fclose(in);
     fclose(out);
-    if (!getenv("N95_KEEP_OP4")) remove(r->temp);
+    if (!getenv("N95_KEEP_OP4")) remove(temp);
     msc_msg(MSC_INFO, 9130, "%s: %s, %ld columns by %ld rows, in MSC's "
-            "formatted OUTPUT4 layout", r->file, r->db, nc, nr);
+            "formatted OUTPUT4 layout", file, r->db, nc, nr);
     return 0;
 }
+
+static int convert_one(const op4_req *r)
+{
+    return convert_file(r, r->temp, r->file, 0);
+}
+
+/* set by the SOL 145 driver: the files were converted from the children,
+ * so the parent's own finish (from the print rewrite) has nothing to do */
+static int op4_collected = 0;
 
 int msc_op4_finish(void)
 {
     int k, rc = 0;
+    if (op4_collected) return 0;
     for (k = 0; k < nreq; k++)
         if (reqs[k].cosmic[0] && convert_one(&reqs[k])) rc = 1;
     return rc;
+}
+
+/* HALO: the SOL 145 driver's children each run the deck with one subcase,
+ * in a directory of their own (mscflut.c), at that subcase's Mach alone
+ * (the MKAERO lists cut to it), and each leaves NASTRAN-95's OUTPUT4 files
+ * there, unconverted (a --cosmic child rewrites no output). So QHHL is
+ * one Mach's blocks per child, and every child's files are converted here
+ * into the output directory as <name>_s<subcase>.<ext>: the k order inside
+ * each is that Mach's MKAERO1 list. MHH, KHH and the like are the same in
+ * every child; they come out per subcase all the same.                  */
+void msc_op4_collect(const char (*child_dir)[32], const int *id, int n)
+{
+    int k, c;
+    op4_collected = 1;
+    for (k = 0; k < nreq; k++) {
+        int got = 0;
+        if (!reqs[k].cosmic[0]) continue;
+        for (c = 0; c < n; c++) {
+            char temp[MSC_PATHLEN + 80], file[MSC_PATHLEN + 40];
+            const char *dot = strrchr(reqs[k].file, '.');
+            FILE *f;
+            snprintf(temp, sizeof(temp), "%s/%s", child_dir[c], reqs[k].temp);
+            f = fopen(temp, "r");
+            if (!f) continue;
+            fclose(f);
+            if (dot && dot > reqs[k].file)
+                snprintf(file, sizeof(file), "%.*s_s%d%s", (int) (dot - reqs[k].file),
+                         reqs[k].file, id[c], dot);
+            else
+                snprintf(file, sizeof(file), "%s_s%d", reqs[k].file, id[c]);
+            if (convert_file(&reqs[k], temp, file, 1) == 0) got++;
+        }
+        if (!got)
+            msc_msg(MSC_WARN, 9134, "OUTPUT4 %s: no child wrote %s (the data block "
+                    "may not exist in this rigid format).", reqs[k].db, reqs[k].file);
+        else
+            msc_msg(MSC_INFO, 9133, "OUTPUT4 %s: %d subcase file(s) %s, one per child "
+                    "(each child's QHHL holds its own Mach's (Mach, k) blocks).",
+                    reqs[k].db, got, reqs[k].file);
+    }
 }

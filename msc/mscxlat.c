@@ -34,6 +34,7 @@
  * fatal that names it. Silently dropping a card changes the model.
  */
 #include "msc.h"
+#include "msctrim.h"
 #include <ctype.h>
 #include <math.h>
 #include <stdlib.h>
@@ -823,6 +824,11 @@ static const char *copy_cards[] = {
     "FLFACT", "MKAERO1", "MKAERO2", "TRIM", "AESTAT", "AESURF",
     "GUST", "RANDPS", "TABRNDG", "TABRND1",
     "DMI", "DMIG",
+    /* HALO (SOL 144 corrections): the box divisions of a CAERO1 that
+     * names LSPAN / LCHORD, and the general element (no grid id over
+     * 2^24-1 in it is renumbered) - MSC's published examples use both */
+    "AEFACT", "GENEL",
+    "CAERO4", "PAERO4",   /* strip theory: SOL 144 divergence (HA145C) */
     NULL
 };
 
@@ -1156,6 +1162,10 @@ static void translate_bulk(msc_ctx *x)
         /* the SOL 200 design model was consumed by the optimiser */
         if (c->dropped) continue;
 
+        /* SOL 144: the static aeroelastic cards go to the AETRIM module
+         * (msctrim.c), not to the solver                               */
+        if (aet_g.active && aet_bulk_card(c)) continue;
+
         if (msc_streq(n, "RBAR"))        { do_rigid_bar(x, c); continue; }
         if (msc_streq(n, "RBE2"))        { do_rbe2(x, c);      continue; }
         if (msc_streq(n, "CBUSH"))       { do_cbush(x, c);     continue; }
@@ -1206,6 +1216,34 @@ static void translate_bulk(msc_ctx *x)
                     attach_dofs(x, msc_fi(c, 5, 0), 1 << (msc_fi(c, 6, 1) - 1));
             } else if (msc_streq(n, "SPC")) {
                 constrain_dofs(x, msc_fi(c, 2, 0), dof_mask(msc_f(c, 3)));
+            } else if (msc_streq(n, "GENEL")) {
+                /* HALO: GENEL EID - UI1 CI1 ... UD UD1 CD1 ... K|Z ...: the
+                 * general element holds every dof it names                */
+                int k2;
+                for (k2 = 3; k2 + 1 <= c->nfld; k2 += 2) {
+                    const char *f = msc_f(c, k2);
+                    if (msc_streq(f, "UD")) { k2--; continue; }
+                    if (msc_streq(f, "K") || msc_streq(f, "Z") || msc_streq(f, "S")) break;
+                    if (!*f) continue;
+                    attach_dofs(x, msc_fi(c, k2, 0), dof_mask(msc_f(c, k2 + 1)));
+                }
+            } else if (msc_streq(n, "MPC") || msc_streq(n, "SUPORT")) {
+                /* HALO: an MPC's dofs leave the f set through the m set (or
+                 * are held by it), and a SUPORT dof is the reference: the
+                 * auto-SPC must not put either in the s set (UFM 2101A)    */
+                int k2;
+                if (msc_streq(n, "SUPORT")) {
+                    for (k2 = 1; k2 + 1 <= c->nfld; k2 += 2)
+                        if (!msc_blank(c, k2))
+                            attach_dofs(x, msc_fi(c, k2, 0), dof_mask(msc_f(c, k2 + 1)));
+                } else {
+                    /* G C A at fields 2 and 5 of the first line, 2 and 5
+                     * of each continuation (its field 1 is blank)        */
+                    for (k2 = 2; k2 + 1 <= c->nfld; k2 += ((k2 - 2) % 8 == 0) ? 3 : 5) {
+                        if (msc_blank(c, k2)) continue;
+                        attach_dofs(x, msc_fi(c, k2, 0), dof_mask(msc_f(c, k2 + 1)));
+                    }
+                }
             }
             continue;
         }
@@ -1674,6 +1712,13 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     st->rf = rf;
     strncpy(st->app, app, sizeof(st->app) - 1);
 
+    /* SOL 144 is a DMAP program around the module AETRIM (msctrim.c)  */
+    aet_reset();
+    if (rf == 144) {
+        aet_g.active = 1;
+        aet_case_scan(d);
+    }
+
     {
         /* a restart's modes deck has its ids numbered with this one's */
         msc_deck rd;
@@ -1691,6 +1736,10 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     ngrid = msc_map_count(&x.grid);
     translate_bulk(&x);
     if (x.fatal) return 1;
+    if (aet_g.active) {
+        if (aet_check() || msc_nfatal()) return 1;
+        aet_emit(&x.out);
+    }
     auto_spc(&x);
 
     /* the SPC the case control selects, plus the auto-SPC set */
@@ -1720,6 +1769,15 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     fprintf(fp, "$ translated from MSC dialect by nastran95ase\n");
     fprintf(fp, "$ this file is written by the solver; edit the MSC deck, not this\n");
     fprintf(fp, "ID      HALO,ASE\n");
+    if (rf == 144) {
+        /* no rigid format: the solution is the front end's DMAP program */
+        aet_write_dmap(fp);
+        if (g_chkpnt || g_restart_dic[0])
+            msc_msg(MSC_WARN, 9465, "SOL 144 runs as a DMAP program and is not "
+                    "checkpointed; scr=no and restart= are ignored.");
+        fprintf(fp, "CEND\n");
+        goto case_control;
+    }
     fprintf(fp, "APP     %s\n", app);
     fprintf(fp, "SOL     %d,0\n", rf);
     fprintf(fp, "TIME    600\n");
@@ -1753,6 +1811,7 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     fprintf(fp, "CEND\n");
 
     /* ---- case control --------------------------------------------- */
+case_control:
     if (!d->title[0]) fprintf(fp, "TITLE = TRANSLATED MSC DECK\n");
     /* NASTRAN-95 stops a job when the print file passes 20,000 lines
      * (UFM 3019). A hundred modes on a few thousand grids is far past

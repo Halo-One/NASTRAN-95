@@ -15,18 +15,18 @@ C     LLINK = LENGTH OF LINK TABLE.
 C
 C     SET SENSE SWITCH 28 TO GENERATE ALL FORTRAN CODE BELOW.
 C
-      DIMENSION       LINK (960),
+      DIMENSION       LINK (975),
      1                LINK01(90), LINK02(90), LINK03(90),LINK04(90),
      2                LINK05(90), LINK06(90), LINK07(90),LINK08(90),
-     3                LINK09(90), LINK10(90), LINK11(70)
-      COMMON /XLKSPC/ LLINK     , KLINK(970)
+     3                LINK09(90), LINK10(90), LINK11(75)
+      COMMON /XLKSPC/ LLINK     , KLINK(975)
       EQUIVALENCE     (LINK(  1), LINK01(1)), (LINK( 91),LINK02(1)),
      1                (LINK(181), LINK03(1)), (LINK(271),LINK04(1)),
      2                (LINK(361), LINK05(1)), (LINK(451),LINK06(1)),
      3                (LINK(541), LINK07(1)), (LINK(631),LINK08(1)),
      4                (LINK(721), LINK09(1)), (LINK(811),LINK10(1)),
      5                (LINK(901), LINK11(1))
-      DATA    LLINKX / 970 /
+      DATA    LLINKX / 975 /
       DATA    LINK01 / 4HCHKP,4HNT  , 4HXCHK,4H    , 32767 ,
      1                 4HREPT,4H    , 4HXCEI,4H    , 32767 ,
      2                 4HJUMP,4H    , 4HXCEI,4H    , 32767 ,
@@ -220,7 +220,9 @@ C
      O                 4HDATA,4HBASE, 4HDBAS,4HE   , 8202  ,
      1                 4HNORM,4H    , 4HNORM,4HAL  , 16    ,
      2                 4HVECG,4HRB  , 4HGRBV,4HEC  , 64    ,
-     3                 4HAUTO,4HASET, 4HAASE,4HT   , 8     /
+     3                 4HAUTO,4HASET, 4HAASE,4HT   , 8     ,
+C    HALO: SOL 144 STATIC AEROELASTIC TRIM (MIS/AETRIM.F)
+     4                 4HAETR,4HIM  , 4HAETR,4HIM  , 32767 /
 C
 C     INITIALIZE /XLKSPC/
 C

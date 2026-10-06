@@ -14,6 +14,7 @@
  * a dropped output request is invisible in the results otherwise.
  */
 #include "msc.h"
+#include "msctrim.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,6 +37,7 @@ static const sol_map sols[] = {
     { 110, "SEMCEIG",  "DISPLACEMENT", 10, "modal complex eigenvalues" },
     { 111, "SEMFREQ",  "DISPLACEMENT", 11, "modal frequency response" },
     { 112, "SEMTRAN",  "DISPLACEMENT", 12, "modal transient response" },
+    { 144, "AESTAT",   "DMAP",       144, "static aeroelastic trim" },
     { 145, "SEFLUTTR", "AERO",         10, "flutter" },
     { 146, "SEAERO",   "AERO",         11, "gust response" },
     {   1, NULL,       "DISPLACEMENT",  1, "linear statics" },
@@ -48,7 +50,6 @@ static const sol_map sols[] = {
 static const sol_map no_map[] = {
     { 106, "NLSTATIC", NULL, 0, "nonlinear statics" },
     { 129, "NLTRAN",   NULL, 0, "nonlinear transient" },
-    { 144, "SEStatic aeroelasticity", NULL, 0, "static aeroelastic trim" },
     { 153, NULL,       NULL, 0, "nonlinear heat transfer" },
     { 159, NULL,       NULL, 0, "transient heat transfer" },
     { 400, NULL,       NULL, 0, "nonlinear (Marc)" },
@@ -331,6 +332,41 @@ void msc_case_write(FILE *fp, msc_deck *d, int *spc_sel, int *method_sel,
         }
         split_case(d->cases[i], name, opts, val);
         if (!name[0]) continue;
+
+        /* SOL 144: the TRIM set of each subcase was read already
+         * (msctrim.c, aet_case_scan) and goes to the AETRIM module, not
+         * to the solver's case control; the SUPORT1 set is always in
+         * force (SUPORT1 became SUPORT)                                 */
+        if (aet_g.active) {
+            if (msc_streq(name, "TRIM")) continue;
+            /* HALO: the DIVERG set of each subcase was read already too;
+             * AETRIM finds the divergence roots itself (all of them, on
+             * the splined set), so CMETHOD's EIGC has no part           */
+            if (msc_streq(name, "DIVERG")) continue;
+            if (msc_streq(name, "CMETHOD")) {
+                msc_msg(MSC_INFO, 9679,
+                    "case control CMETHOD = %s: SOL 144's divergence roots are found\n"
+                    "by AETRIM on the splined set (every root, LAPACK DGEEV), not by\n"
+                    "a complex eigensolver; the EIGC is not used.", val);
+                continue;
+            }
+            /* the box pressures and forces at trim: AETRIM prints them   */
+            if (msc_streq(name, "APRES") || msc_streq(name, "APRESSURE")) {
+                aet_g.want_apres = !msc_streq(val, "NONE");
+                continue;
+            }
+            if (msc_streq(name, "AEROF") || msc_streq(name, "AEROFORCE")) {
+                aet_g.want_aerof = !msc_streq(val, "NONE");
+                continue;
+            }
+            if (msc_streq(name, "SUPORT1") || msc_streq(name, "SUPORT")) {
+                msc_msg(MSC_INFO, 9116,
+                    "case control %s = %s: the SUPORT1 cards became SUPORT, which\n"
+                    "NASTRAN-95 always applies; the request is not needed.", name, val);
+                continue;
+            }
+        }
+
 
         /* the aerodynamic pressures and forces on the boxes: MSC prints
          * them on two requests (APRES, AEROF); NASTRAN-95 has one, AEROF,

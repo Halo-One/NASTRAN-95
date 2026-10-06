@@ -143,7 +143,11 @@ C
      4, 33, 4HDUMM,4HOD4 , 1, 8, 8,10,  1,-1, 1,-1, 1,-1, 1,-1, 2,1, 2,1
      *                               ,  3, 4HABCD , 4HEFGH,  4, 2,2, 5,3
      *                               ,  3, 6, 4, 4, 5, 5
-     M, 20, 19*0
+C    HALO: AETRIM, SOL 144 STATIC AEROELASTIC TRIM (MIS/AETRIM.F). IT
+C    TAKES THE 20 WORDS OF THE BLANK ENTRY THAT WAS HERE, SO THAT NO
+C    MODULE AFTER IT MOVES IN THE MPL (XSEM00 DISPATCHES BY POSITION)
+     5, 20, 4HAETR,4HIM  , 1,19, 4, 1,  1, 0, 1, 0, 1, 0, 1, 0, 1, 0
+     *                               ,  3, 4HTRIM , 4H    
      Z/
 C
       DATA  MPL05 /

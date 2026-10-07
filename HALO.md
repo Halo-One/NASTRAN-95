@@ -1558,8 +1558,8 @@ and grids inside DMIG columns. Keep those under 2^24-1.
   - the vibe deck: 836,818 lines;
   - the modes run: 40,559 lines;
   - the restarted five-Mach flutter: 10,855,484 lines.
-  (VehicleDesign `.claude/skills/build-nastran95/scripts/shift_ids.py` makes the copy
-  and does the comparison.)
+  (`.claude/skills/build-nastran95/scripts/shift_ids.py`, in this repository since
+  2026-10-07 and in VehicleDesign before, makes the copy and does the comparison.)
 - *PR #209's own decks.* They run: the mfp3 and monarch vibe decks, and the CI's modes
   plus flutter restart. Against main's deck the lowest crossings move by 1.2 % or less.
   That is PR #209's v-stab 1 attachment fix, not the numbering.
@@ -1688,3 +1688,88 @@ balance; a typical section's divergence is K / (S c CMY_alpha) to 7 digits.
 Unchanged: the monarch trim deck's tables, trims and displacements (only fixed trim
 variables now print their exact TRIM value instead of the solve's 1e-20 roundoff, and
 OLOAD rotations of 1e-26 print 0.0), and the small trim test deck likewise.
+
+## The standalone packaging lives here now: `standalone/`, the skills, the flat plate
+
+Until 2026-10-07 the two executables were packaged in Halo One's VehicleDesign
+repository, under `utilities/open_source_software/NASTRAN/`: the build scripts that
+downloaded a pinned commit of this fork and built it, the launcher stand-ins, the test
+decks and Simcenter's prints of them, the MATLAB tests, two worked examples, and the
+skills `build-nastran95` and `nastran95-performance` that say how to build and how to
+measure. Everything of that which is about `nastran95ase` rather than about
+VehicleDesign's aircraft now lives in the fork itself, so that the executables are
+built from the checkout they are the executables of and a change to the solver and the
+change to its build or its checks travel in one commit:
+
+| here | what it was in VehicleDesign |
+|---|---|
+| `standalone/README.md` | the packaging's README: running, the MSC dialect, the solutions, verification |
+| `standalone/build/build_nastran95.ps1`, `build_nastran95.sh` | the Windows and Linux builds. **They build this checkout by default**; `-Commit <sha>` / `--commit <sha>` downloads that commit of the fork instead (a release build, whose record names a commit anyone can fetch), `-Source` / `--source` another local tree, `-InstallDir` / `--install-dir` where the executables and the build record go (VehicleDesign's folder, to update its copies), `-WorkDir` / `--work-dir` the toolchain and OpenBLAS cache. The record names the source tree, its HEAD, its branch, and `+ local changes` when the tree was dirty; `--version` prints the branch (less `halo-ase-`), the short commit, the compiler and the date as before |
+| `standalone/nastran.bat`, `standalone/nastran` | the stand-ins for the licensed solver's launcher |
+| `standalone/run_nastran95.bat`, `run_nastran95.sh` | the drag-and-drop convenience |
+| `standalone/test/decks/`, `standalone/test/data/` | the small test decks (the two-subcase flutter deck and its modes deck, the plate flutter deck, the small free-free aircraft, the typical section, the Aeroelastic guide's HA144A, HA144B and HA145C rebuilt from the guide) and Simcenter Nastran 2606's prints of the guide decks |
+| `standalone/test/run_decks.py` | **new**: the checks without MATLAB and without another solver, below |
+| `standalone/test/n95_platform.m`, `test_nastran95ase_*.m` | the MATLAB tests of the flutter driver, SOL 144 and its corrections. They read the print files through VehicleDesign's `utilities/jhc_library` readers, which stay there: `n95_platform('readers')` finds a VehicleDesign checkout through `VEHICLEDESIGN_ROOT` or beside the fork, and without one the tests are incomplete, not failed |
+| `standalone/examples/cantilever/` | the two 1970s-dialect decks and their prints |
+| `standalone/examples/flat_plate/` | **new**: one wing three ways, below |
+| `.claude/skills/build-nastran95/`, `.claude/skills/nastran95-performance/` | the skills, their paths and procedures rewritten for the fork; the dated history of which commit each repository built when is condensed to its outcome (every `halo-ase-*` branch is in 821d508, which both repositories' executables were built from on 2026-10-06) |
+
+The executables and the build records are gitignored here: they are build products of
+this repository. VehicleDesign goes on committing the copies it runs, built by these
+scripts with `-Commit <a sha pushed here> -InstallDir <its NASTRAN folder>`, so its
+`BUILD_INFO` goes on naming a commit of this repository. What stayed there because it
+is about its aircraft or its licensed seat: the monarch acceptance tests
+(`test_nastran95ase_aeroelastic.m`, `test_nastran95ase_flutter_vs_simcenter.m`), the
+Simcenter-only tests, the monarch GVT worked example, and the flutter job in its CI.
+
+**`run_decks.py`.** Every deck in `standalone/test/decks` and the flat plate's three
+run to exit 0 with `END OF JOB` and no fatal; then the numbers, with tolerances taken
+from the MATLAB tests they stand in for: the typical section's divergence against
+K / (S c CMY_alpha); HA144A's CZ and CMY rows (six columns) and its trims against
+Simcenter's print (1.5e-6 of a row's largest coefficient, 1e-6 on the trim); HA144B's
+divergence roots (3e-6) and HA145C's strip-theory divergence speed (0.5 ft/s); HA144B
+with WKK = 2 I, where the roll trim is Simcenter's and the divergence roots are half of
+Simcenter's by design; the small aircraft's lift equal to its weight in both trims; the
+two-subcase flutter deck through the driver cold and restarted off its checkpointed
+modes, the two flutter summaries the same; and the flat plate's three solutions against
+each other. About a minute. It reads the print file with regular expressions on the MSC
+layout, which both codes print - one thing learned writing it: `nastran95ase` paginates
+every 60 lines and a page header can fall inside any table, so a reader ends a table at
+the next table's heading, never at an unrecognised line.
+
+**The flat plate** (`standalone/examples/flat_plate/`): an aluminium plate 0.2 m by
+0.5 m by 2 mm, clamped along its root, 4 x 8 `CQUAD4` and one `CAERO1` of the same 4 x 8
+boxes on a surface spline, the root a reflection plane (SYMXZ), at sea level and Mach
+0.1. Three decks share the model and the flight point (40 m/s, q = 980 Pa), so each
+checks the others, and all three run in about ten seconds together:
+
+- `flat_plate_sol144.dat` trims it at ANGLEA = 0.025 rad (what a 1 m/s vertical gust is
+  at 40 m/s) with no SUPORT, and asks for its divergence (`DIVERG`). CZ_alpha rigid
+  4.1260, elastic restrained 5.0395 (a ratio of 1.2214 against 1/(1 - q/q_div) = 1.2154
+  for a single divergence mode); tip deflection 1.8093e-2 m; q_div = 5529.3 Pa, 95.0 m/s
+  at sea level.
+- `flat_plate_sol145.dat`: PK on matched points, 10 to 110 m/s, the three lowest modes
+  (6.74 Hz bending, 33.1 Hz torsion, 41.7 Hz second bending; the three above them,
+  105-194 Hz, would need k of 7 to 12 at 10 m/s, past the `MKAERO1` list and past what
+  four chordwise boxes resolve, and their PK roots came out with a spurious positive
+  damping - hence `LMODES 3`). The torsion root couples with bending and crosses to
+  flutter at 70.0 m/s, 22.2 Hz; the bending root goes aperiodic near 80 m/s and its real
+  root crosses zero at 95.7 m/s - SOL 144's divergence speed within 0.8 %, the PK's
+  zero-frequency aerodynamics being extrapolated from k = 0.001.
+- `flat_plate_sol146.dat`: the harmonic response to a 1 m/s gust at 40 m/s from 0.5 to
+  80 Hz, and through `RANDOM` a von Karman gust of 1 m/s rms and 2.5 m scale (`TABRNDG`),
+  2 % structural damping. At 0.5 Hz the tip's response is 1.8191e-2 m, SOL 144's static
+  deflection times the quasi-static magnification 1/(1 - (0.5/6.52)^2) = 1.0059 (within
+  1 %, checked); the PSD at the tip is |H|^2 times the TABRNDG spectrum
+  2 (L/V) sigma^2 [1 + 8/3 (1.339 omega L/V)^2] / [1 + (1.339 omega L/V)^2]^(11/6), a
+  density per Hz that integrates to sigma^2, at every frequency; its peak is at 6.0 Hz;
+  the rms 2.084e-2 m is the square root of the PSD's integral and N0 5.32 Hz.
+
+Both the decks' comments and `standalone/examples/flat_plate/README.md` say where each
+number is in each print. The prints of this build are committed beside the decks
+(`out/`), so a later build can be diffed against them.
+
+The user's manual (`doc/nastran95ase_users_manual.md`) said in §4 that SOL 144 had no
+equivalent and the trim decks needed the licensed solver; that was true of the branch it
+was written on and not of this one, and it now names the module and the DMAP program.
+Its §14 starts from this repository's own examples before VehicleDesign's.

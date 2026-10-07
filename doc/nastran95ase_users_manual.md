@@ -32,8 +32,10 @@ nothing has to be installed beside the executable (`HALO.md`, "Making the execut
 stand alone").
 
 `--version` prints `NASTRAN_BUILD_ID`, a configure-time string naming the commit,
-compiler and date (`HVERS` in `bin/nastrn.f.in`). Since 2026-09-26 the Windows and Linux
-executables build from one fork branch, `halo-ase-sol145-perf` (skill `build-nastran95`).
+compiler and date (`HVERS` in `bin/nastrn.f.in`). Both executables, on both systems, are
+built from one checkout by `standalone/build/build_nastran95.ps1` (Windows) and
+`build_nastran95.sh` (Linux); `standalone/README.md` and the skill `build-nastran95` have
+the procedure, and `standalone/test/run_decks.py` the checks to run on a fresh build.
 
 ## 2. Command line
 
@@ -173,14 +175,15 @@ The SOL map is `sols[]` in `msc/mscexec.c`:
 | 107 .. 112 | DISPLACEMENT 7 .. 12 | direct/modal complex eigenvalues, frequency and transient response |
 | 145 (`SEFLUTTR`) | AERO 10 | modal flutter (section 7) |
 | 146 (`SEAERO`) | AERO 11 | modal aeroelastic (gust) response (section 8) |
+| 144 (`AESTAT`) | no rigid format: an `APP DMAP` program the front end writes around the module `AETRIM` (`msc/msctrim.c`, `mis/aetrim.f`, `msc/mscaest.c`) | static aeroelastic trim, the stability derivatives, correction matrices and divergence (`SOL144.md`; `HALO.md`, "SOL 144") |
 | 200 | not translated: a design cycle run by `msc/mscopt.c` around child analyses of this executable | design optimisation (section 4.1) |
 | 1, 3 | DISPLACEMENT 1, 3 | the bare rigid format numbers |
 
-`SOL 106`, `129`, `144`, `153`, `159`, `400`, `401`, `402` are named in `no_map[]` so the
-fatal (UFM 9110) can say what was asked for: "NASTRAN-95 has no equivalent". There is no
-COSMIC counterpart to SOL 144, static aeroelastic trim; the NASTRAN trim decks need the
-licensed solver (skill `nastran-flutter` §7). A deck naming no solution the front end
-recognises is UFM 9111.
+`SOL 106`, `129`, `153`, `159`, `400`, `401`, `402` are named in `no_map[]` so the fatal
+(UFM 9110) can say what was asked for: "NASTRAN-95 has no equivalent". A deck naming no
+solution the front end recognises is UFM 9111. (COSMIC NASTRAN had no static aeroelastic
+solution; SOL 144 is this fork's, since 2026-09-30. A build from before it stops on a
+SOL 144 deck with UFM 9110.)
 
 ### 4.1 SOL 200
 
@@ -794,7 +797,24 @@ Messages wrap at 72 columns on a space, a word wider than the margin (a path) le
 
 ## 14. Worked examples
 
-From VehicleDesign's repo root on Windows (`cmd`); on Linux replace `.exe` with the bare
+In this repository, from its root (`standalone/README.md` reads the prints; on Linux
+drop the `.exe` and turn the `\` round):
+
+```
+standalone\nastran95ase.exe standalone\examples\flat_plate\flat_plate_sol144.dat C:\runs
+        a cantilevered flat plate trimmed at an angle of attack, and its divergence
+standalone\nastran95ase.exe standalone\examples\flat_plate\flat_plate_sol145.dat C:\runs
+        the same plate's PK flutter on matched points, 10 to 110 m/s
+standalone\nastran95ase.exe standalone\examples\flat_plate\flat_plate_sol146.dat C:\runs
+        its gust response: the harmonic response and the von Karman PSD at the tip
+standalone\nastran95.exe standalone\examples\cantilever\cantilever_modes.inp C:\runs
+        a 1970s-dialect deck through the other executable
+python standalone\test\run_decks.py
+        every test deck, and the three plate solutions held to each other
+```
+
+From VehicleDesign's repo root on Windows (`cmd`), where the executables are installed
+under `utilities\open_source_software\NASTRAN`; on Linux replace `.exe` with the bare
 name and `\` with `/`:
 
 ```

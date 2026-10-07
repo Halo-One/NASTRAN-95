@@ -1,0 +1,84 @@
+$ The Aeroelastic Analysis User's Guide's example HA145C (the BAH jet
+$ transport wing by strip theory), its structure and strips (sorted bulk
+$ data: MSC's 2023.1 edition, listing 8-9; Simcenter 2606's, Table 7-9) as
+$ a SOL 144 divergence analysis: the guide's static divergence speed is
+$ 1419.9 ft/s (Bisplinghoff, Ashley and Halfman), its K-method 1419.8 ft/s
+$ at k 0.0001 (Simcenter 2606's guide, p. 7-64); at RHOREF 1.1468-7
+$ lb-s2/in4 that is q = 16.646 psi.
+$ CMETHOD / EIGC for Simcenter's complex eigensolver (nastran95ase reads
+$ and does not use them). Simcenter Nastran 2606: q = 16.64156 psi
+$ (data/ha145c_diverg_simcenter2606.f06).
+SOL 144
+CEND
+TITLE = EXAMPLE HA145C: BAH JET TRANSPORT WING, STRIP THEORY
+SUBTI = STATIC DIVERGENCE
+ECHO = BOTH
+SPC = 1
+SUBCASE 1
+  DIVERG = 1
+  CMETHOD = 1
+BEGIN BULK
+AEFACT  77      .0      .09     .276    .454    .636    .826    1.0
+AEROS   1       1       131.232 1000.0  81250.0 1
+CAERO4  4000    4001    0       0       77                              +BAH
++BAH    78.75   0.0     0.0     225.0   35.0    500.0   0.0     100.0
+CMASS2  121     5248.7  1       3
+CMASS2  122     134.9   1       3       2       3
+CMASS2  123     790.3   2       3
+CMASS2  341     9727.   3       3
+CMASS2  342     11005.  3       3       4       3
+CMASS2  343     473.    4       3
+CMASS2  561     3253.6  5       3
+CMASS2  562     -139.7  5       3       6       3
+CMASS2  563     946.3   6       3
+CMASS2  781     2617.8  7       3
+CMASS2  782     21.     7       3       8       3
+CMASS2  783     782.3   8       3
+CMASS2  9101    494.8   9       3
+CMASS2  9102    -7.3    9       3       10      3
+CMASS2  9103    185.2   10      3
+CONM1   1       11                                                      +51
++51     17400.                          4.37+7                          +52
++52             4.35+09
+CORD2R  1               0.      0.      0.      0.      0.      -1.     +C1
++C1     -1.     0.      0.
+DIVERG  1       3       0.0
+EIGC    1       CLAN    MAX                             6
+GENEL   432             1       3       2       3       3       3       +01
++01     4       3       5       3       6       3       7       3       +02
++02     8       3       9       3       10      3                       +03
++03     UD              11      3       11      4       11      5       +04
++04     11      6                                                       +05
++05     Z       8.7172-61.3361-61.2778-56.2720-61.6251-51.0492-52.0478-5+06
++06     1.5630-52.4285-52.0403-53.0861-56.2720-63.2297-51.0492-53.3529-5+07
++07     1.5630-53.5021-52.0257-53.5785-52.7732-51.5726-54.8255-53.7628-5+08
++08     7.3284-56.4338-59.5810-58.8378-56.3749-53.7628-58.0136-56.4338-5+09
++09     1.0012-48.8378-51.1811-41.2758-41.1344-41.9350-41.8160-42.5283-4+10
++10     2.4294-41.6999-41.8160-42.2920-42.4294-42.8249-43.6862-43.5052-4+11
++11     5.2675-45.1171-44.2292-45.1171-45.7187-48.4840-48.2340-49.2340-4+12
++12     S       1.0     90.0    -20.25  45.0    1.0     90.0    81.0    +13
++13     45.0    1.0     186.0   -17.85  141.0   1.0     186.0   71.4    +14
++14     141.0   1.0     268.0   -15.80  223.0   1.0     268.0   63.2    +15
++15     223.0   1.0     368.0   -13.30  323.0   1.0     368.0   53.2    +16
++16     323.0   1.0     458.0   -11.05  413.0   1.0     458.0   44.2    +17
++17     413.0
+GRID    1               20.25   90.                     12456
+GRID    2               -81.    90.                     12456
+GRID    3               17.85   186.                    12456
+GRID    4               -71.4   186.                    12456
+GRID    5               15.8    268.                    12456
+GRID    6               -63.2   268.                    12456
+GRID    7               13.3    368.                    12456
+GRID    8               -53.2   368.                    12456
+GRID    9               11.05   458.                    12456
+GRID    10              -44.2   458.                    12456
+GRID    11              0.0     0.                      126
+PAERO4  4001    0       0       0       0       0.0     0.0     0.0     +PA41
++PA41   0.0     0.0     0.0     0.0     0.0     0.0     0.0     0.0     +PA42
++PA42   0.0     0.0     0.0     0.0     0.0     0.0     0.0
+PARAM   WTMASS  .0025907
+SET1    14      1       THRU    11
+SPC     1       11      345
+SPLINE2 100     4000    4001    4005    14      .0      1.0     0       +SP100
++SP100  -1.0    -1.0
+ENDDATA

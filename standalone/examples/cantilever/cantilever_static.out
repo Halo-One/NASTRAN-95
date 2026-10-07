@@ -1,0 +1,179 @@
+
+
+
+
+
+
+                                  ****
+                                *      *
+                               *        *
+                               *  N A S T R A N
+                               *        *
+                                *      *
+                                  ****
+
+
+                             SUN COMPUTER SYSTEMS    
+                                SOLARIS VERSION
+
+                          SYSTEM RELEASE -  1995 ED.
+
+                                DISTRIBUTED BY
+
+         COMPUTER SOFTWARE MANAGEMENT AND INFORMATION CENTER (COSMIC)
+                 UNIVERSITY OF GEORGIA, ATHENS, GEORGIA 30602
+                 PHONE: (706)542-3265      FAX: (706)542-4807
+1                                                                           /    95 SUN SOLARIS NASTRAN    / OCT  1, 26 / PAGE     2
+                                                                                                                                    
+0                                                                                                                                   
+                                                                                                         
+                                                                                                         
+                         INSTALLATION CENTER USER INFORMATION GIVEN IN THIS SECTION                      
+                                                                                                         
+                                     *********************************************                       
+                                     *                                           *                       
+                                     *  PLEASE READ THE COMMENT IN DEMO PROBLEM  *                       
+                                     *  D01002A ABOUT SYSTEM TIMING CONSTANTS    *                       
+                                     *                                           *                       
+                                     *********************************************                       
+                                                                                                         
+                         ===X=    TOP OF PAGE REQUEST IF 'X' IS REPLACED BY '='                          
+                                                                                                         
+1                                                                           /    95 SUN SOLARIS NASTRAN    / OCT  1, 26 / PAGE     3
+                                                                                                                                    
+0                                                                                                                                   
+0*** USER INFORMATION MESSAGE 225, GINO TIME CONSTANTS ARE BEING COMPUTED
+     (SEE NASINFO FILE FOR ELIMINATION OF THESE COMPUTATIONS)
+1                                                                           /    95 SUN SOLARIS NASTRAN    / OCT  1, 26 / PAGE     4
+                                                                                                                                    
+0        N A S T R A N    E X E C U T I V E    C O N T R O L    D E C K    E C H O                                                  
+0                                                                                                                                   
+                                                                                                                                    
+                                                                                                                                    
+     ID    CANTBAR,STATIC                                                            
+     APP   DISPLACEMENT                                                              
+     SOL   1,0                                                                       
+     TIME  2                                                                         
+     CEND                                                                            
+1     CANTILEVER BAR, TIP LOAD                                              /    95 SUN SOLARIS NASTRAN    / OCT  1, 26 / PAGE     5
+      NASTRAN-95 VS SIMCENTER NASTRAN CROSS-CHECK                                                                                   
+0                                                                                                                                   
+0                                        C A S E    C O N T R O L   D E C K   E C H O                                               
+                 CARD                                                                                                               
+                 COUNT                                                                                                              
+                  1      TITLE = CANTILEVER BAR, TIP LOAD                                                
+                  2      SUBTITLE = NASTRAN-95 VS SIMCENTER NASTRAN CROSS-CHECK                          
+                  3      SPC = 1                                                                         
+                  4      LOAD = 1                                                                        
+                  5      DISPLACEMENT = ALL                                                              
+                  6      SPCFORCES = ALL                                                                 
+                  7      ELFORCE = ALL                                                                   
+                  8      BEGIN BULK                                                                      
+
+
+                        (NO. OF UNSORTED BULK DATA CARDS READ =    26, INCLUDING   0 COMMENT CARDS)
+0*** USER INFORMATION MESSAGE 207, BULK DATA DECK IS NOT SORTED. NASTRAN WILL RE-ORDER THE INPUT DECK.
+1     CANTILEVER BAR, TIP LOAD                                              /    95 SUN SOLARIS NASTRAN    / OCT  1, 26 / PAGE     6
+      NASTRAN-95 VS SIMCENTER NASTRAN CROSS-CHECK                                                                                   
+0                                                                                                                                   
+0                                                 S O R T E D   B U L K    D A T A    E C H O                                       
+                     CARD                                                                                                           
+                     COUNT        ---1--- +++2+++ ---3--- +++4+++ ---5--- +++6+++ ---7--- +++8+++ ---9--- +++10+++                  
+                    1-        CBAR    1       1       1       2       0.0     0.0     1.0                     
+                    2-        CBAR    2       1       2       3       0.0     0.0     1.0                     
+                    3-        CBAR    3       1       3       4       0.0     0.0     1.0                     
+                    4-        CBAR    4       1       4       5       0.0     0.0     1.0                     
+                    5-        CBAR    5       1       5       6       0.0     0.0     1.0                     
+                    6-        CBAR    6       1       6       7       0.0     0.0     1.0                     
+                    7-        CBAR    7       1       7       8       0.0     0.0     1.0                     
+                    8-        CBAR    8       1       8       9       0.0     0.0     1.0                     
+                    9-        CBAR    9       1       9       10      0.0     0.0     1.0                     
+                   10-        CBAR    10      1       10      11      0.0     0.0     1.0                     
+                   11-        FORCE   1       11              10.0    0.0     0.5     -1.0                    
+                   12-        GRID    1               0.000   0.0     0.0                                     
+                   13-        GRID    2               0.100   0.0     0.0                                     
+                   14-        GRID    3               0.200   0.0     0.0                                     
+                   15-        GRID    4               0.300   0.0     0.0                                     
+                   16-        GRID    5               0.400   0.0     0.0                                     
+                   17-        GRID    6               0.500   0.0     0.0                                     
+                   18-        GRID    7               0.600   0.0     0.0                                     
+                   19-        GRID    8               0.700   0.0     0.0                                     
+                   20-        GRID    9               0.800   0.0     0.0                                     
+                   21-        GRID    10              0.900   0.0     0.0                                     
+                   22-        GRID    11              1.000   0.0     0.0                                     
+                   23-        MAT1    1       70.0+9          0.33    2700.0                                  
+                   24-        MOMENT  1       11              2.0     1.0     0.0     0.0                     
+                   25-        PBAR    1       1       4.0-4   1.0-8   2.0-8   1.5-8                           
+                   26-        SPC1    1       123456  1                                                       
+                              ENDDATA
+0*** USER INFORMATION MESSAGE -  GRID-POINT RESEQUENCING PROCESSOR BANDIT IS NOT USED DUE TO
+     SMALL PROBLEM SIZE
+0          **NO ERRORS FOUND - EXECUTE NASTRAN PROGRAM**
+0*** USER INFORMATION MESSAGE 238, TURN DIAG 38 ON FOR ADDITIONAL ELEMENT PROCESSING INFORMATION
+
+1     CANTILEVER BAR, TIP LOAD                                              /    95 SUN SOLARIS NASTRAN    / OCT  1, 26 / PAGE     7
+      NASTRAN-95 VS SIMCENTER NASTRAN CROSS-CHECK                                                                                   
+
+                                                                                                                                    
+
+
+
+
+0*** USER INFORMATION MESSAGE 3113,
+     EMG MODULE PROCESSING DOUBLE PRECISION BAR      ELEMENTS (ELEMENT TYPE  34) STARTING WITH ID        1
+0*** USER INFORMATION MESSAGE 3035
+     FOR SUBCASE NUMBER     1, EPSILON SUB E =   6.5830934E-13
+1     CANTILEVER BAR, TIP LOAD                                              /    95 SUN SOLARIS NASTRAN    / OCT  1, 26 / PAGE     8
+      NASTRAN-95 VS SIMCENTER NASTRAN CROSS-CHECK                                                                                   
+0                                                                                                                                   
+ 
+                                             D I S P L A C E M E N T   V E C T O R
+ 
+      POINT ID.   TYPE          T1             T2             T3             R1             R2             R3
+             1      G      0.0            0.0            0.0            0.0            0.0            0.0                           
+             2      G      0.0            1.726191E-05  -6.904762E-05   5.066667E-04   1.357143E-03   3.392857E-04                  
+             3      G      0.0            6.666667E-05  -2.666667E-04   1.013333E-03   2.571429E-03   6.428572E-04                  
+             4      G      0.0            1.446429E-04  -5.785715E-04   1.520000E-03   3.642857E-03   9.107143E-04                  
+             5      G      0.0            2.476191E-04  -9.904762E-04   2.026667E-03   4.571429E-03   1.142857E-03                  
+             6      G      0.0            3.720238E-04  -1.488095E-03   2.533334E-03   5.357143E-03   1.339286E-03                  
+             7      G      0.0            5.142858E-04  -2.057143E-03   3.040000E-03   6.000000E-03   1.500000E-03                  
+             8      G      0.0            6.708333E-04  -2.683333E-03   3.546667E-03   6.500000E-03   1.625000E-03                  
+             9      G      0.0            8.380953E-04  -3.352381E-03   4.053334E-03   6.857143E-03   1.714286E-03                  
+            10      G      0.0            1.012500E-03  -4.050000E-03   4.560000E-03   7.071428E-03   1.767857E-03                  
+            11      G      0.0            1.190476E-03  -4.761905E-03   5.066667E-03   7.142857E-03   1.785714E-03                  
+1     CANTILEVER BAR, TIP LOAD                                              /    95 SUN SOLARIS NASTRAN    / OCT  1, 26 / PAGE     9
+      NASTRAN-95 VS SIMCENTER NASTRAN CROSS-CHECK                                                                                   
+0                                                                                                                                   
+ 
+                               F O R C E S   O F   S I N G L E - P O I N T   C O N S T R A I N T
+ 
+      POINT ID.   TYPE          T1             T2             T3             R1             R2             R3
+             1      G      0.0           -5.000000E+00   1.000000E+01  -2.000000E+00  -1.000000E+01  -5.000000E+00                  
+1     CANTILEVER BAR, TIP LOAD                                              /    95 SUN SOLARIS NASTRAN    / OCT  1, 26 / PAGE    10
+      NASTRAN-95 VS SIMCENTER NASTRAN CROSS-CHECK                                                                                   
+0                                                                                                                                   
+ 
+                                 F O R C E S   I N   B A R   E L E M E N T S         ( C B A R )
+0    ELEMENT         BEND-MOMENT END-A            BEND-MOMENT END-B                - SHEAR -               AXIAL
+       ID.         PLANE 1       PLANE 2        PLANE 1       PLANE 2        PLANE 1       PLANE 2         FORCE         TORQUE
+            1    -9.999999E+00 -5.000000E+00  -8.999994E+00 -4.499997E+00  -1.000005E+01 -5.000024E+00  -0.0            2.000000E+00
+            2    -8.999992E+00 -4.499996E+00  -7.999992E+00 -3.999996E+00  -1.000000E+01 -5.000000E+00  -0.0            2.000000E+00
+            3    -8.000000E+00 -4.000000E+00  -7.000000E+00 -3.500000E+00  -1.000000E+01 -5.000000E+00  -0.0            2.000000E+00
+            4    -7.000000E+00 -3.500000E+00  -6.000000E+00 -3.000000E+00  -1.000000E+01 -5.000000E+00  -0.0            2.000000E+00
+            5    -6.000061E+00 -3.000031E+00  -5.000061E+00 -2.500031E+00  -1.000000E+01 -5.000000E+00  -0.0            2.000000E+00
+            6    -5.000000E+00 -2.500000E+00  -4.000000E+00 -2.000000E+00  -1.000000E+01 -5.000000E+00  -0.0            1.999999E+00
+            7    -4.000000E+00 -2.000000E+00  -3.000196E+00 -1.500098E+00  -9.998047E+00 -4.999023E+00  -0.0            2.000000E+00
+            8    -3.000122E+00 -1.500061E+00  -2.000122E+00 -1.000061E+00  -1.000000E+01 -5.000000E+00  -0.0            2.000001E+00
+            9    -1.999878E+00 -9.999390E-01  -1.000074E+00 -5.000368E-01  -9.998047E+00 -4.999023E+00  -0.0            2.000000E+00
+           10    -1.000244E+00 -5.001221E-01   1.467466E-04  7.337332E-05  -1.000391E+01 -5.001953E+00  -0.0            2.000000E+00
+
+
+
+
+                                        * * * END OF JOB * * *
+1
+ JOB TITLE =  CANTILEVER BAR, TIP LOAD                                           
+ DATE: 10/ 1/26
+ END TIME: 20:15:57
+ TOTAL WALL CLOCK TIME      0 SEC.
+ 

@@ -1,3 +1,15 @@
-build/
+# CMake build trees at the root (a bare "build/" would also ignore standalone/build/)
+/build/
+/build-dev*/
+/build-*/
 bin/*.exe
-build-dev*/
+
+# the standalone executables and their build records are build products:
+# standalone/build/build_nastran95.{ps1,sh} make them from this checkout, and
+# the record says which commit. The toolchain, OpenBLAS and the CMake build
+# trees live under standalone/build/work.
+standalone/nastran95
+standalone/nastran95ase
+standalone/*.exe
+standalone/BUILD_INFO*.txt
+standalone/build/work/

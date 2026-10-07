@@ -1,0 +1,87 @@
+SOL 145
+CEND
+TITLE = plate flutter deck: a cantilever beam, its torsion lumped, the aerodynamic centre ahead of the axis
+ECHO = SORT
+SPC = 1
+METHOD = 1
+CMETHOD = 2
+SET 103 = 1,2,3,4,5,6
+DISP = 103
+OFREQUENCY = ALL
+SUBCASE 2010
+  LABEL = mach 0.10
+  FMETHOD = 2010
+SUBCASE 2020
+  LABEL = mach 0.20
+  FMETHOD = 2020
+BEGIN BULK
+PARAM,GRDPNT,99999999
+PARAM,WTMASS,1.
+PARAM,LMODES,6
+PARAM,COUPMASS,1
+PARAM,OPPHIPA,1
+PARAM,PKVECT,1
+GRID,1,,0.0,0.0,0.0
+GRID,2,,0.0,0.2,0.0
+GRID,3,,0.0,0.4,0.0
+GRID,4,,0.0,0.6,0.0
+GRID,5,,0.0,0.8,0.0
+GRID,6,,0.0,1.0,0.0
+GRID,99999999,,0.0,0.0,0.0
+$ two grids off the beam axis on bars (grid 7 at the root, 8 at the tip), so
+$ that the surface spline sees the twist; CONM2 rotary inertias give the
+$ bar its torsion (NASTRAN-95's bar mass carries none); the panel's
+$ quarter chord sits 0.045 m ahead of the axis, so the bending-torsion
+$ root crosses to flutter at about 62 m/s, k 1.3, and the torsion branch
+$ diverges at about 104 m/s
+GRID,7,,0.15,0.0,0.0
+GRID,8,,0.15,1.0,0.0
+CBAR,101,1,1,7,0.0,1.0,0.0
+CBAR,102,1,6,8,0.0,1.0,0.0
+CONM2,202,2,0,0.0,,,,,+
++,0.0,0.0,2.7E-5,0.0,0.0,0.0
+CONM2,203,3,0,0.0,,,,,+
++,0.0,0.0,2.7E-5,0.0,0.0,0.0
+CONM2,204,4,0,0.0,,,,,+
++,0.0,0.0,2.7E-5,0.0,0.0,0.0
+CONM2,205,5,0,0.0,,,,,+
++,0.0,0.0,2.7E-5,0.0,0.0,0.0
+CONM2,206,6,0,0.0,,,,,+
++,0.0,0.0,2.7E-5,0.0,0.0,0.0
+CBAR,1,1,1,2,1.0,0.0,0.0
+CBAR,2,1,2,3,1.0,0.0,0.0
+CBAR,3,1,3,4,1.0,0.0,0.0
+CBAR,4,1,4,5,1.0,0.0,0.0
+CBAR,5,1,5,6,1.0,0.0,0.0
+PBAR,1,1,1.0E-4,1.0E-8,4.0E-8,4.0E-9
+MAT1,1,7.0E10,,0.33,2700.0
+SPC1,1,123456,1,99999999
+EIGRL,1,,,6,,,,MASS
+EIGC,2,CLAN,MAX,,,,,,+
++,0.0,0.0,,,,6
+AERO,0,,0.3,1.225,1,0
+CAERO1,7101000,1,0,4,2,,,1,+
++,-0.12,0.0,0.0,0.3,-0.12,1.0,0.0,0.3
+PAERO1,1
+SET1,1010000,1,2,3,4,5,6,7,+
++,8
+SPLINE1,7101000,7101000,7101000,7101007,1010000,0.001,IPS,BOTH
+MKAERO1,0.1,0.2,,,,,,,+
++,0.02,0.05,0.1,0.2,0.3,0.4,0.6,0.8
+MKAERO1,0.1,0.2,,,,,,,+
++,1.2,1.6,2.4,3.2
+FLUTTER,2010,PKNL,3010,4010,5010,TCUB,6
+FLFACT,3010,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,+
++,1.0,1.0,1.0,1.0,1.0,1.0
+FLFACT,4010,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,+
++,0.1,0.1,0.1,0.1,0.1,0.1
+FLFACT,5010,10.0,20.0,30.0,40.0,50.0,55.0,60.0,65.0,+
++,70.0,75.0,80.0,90.0,100.0,120.0
+FLUTTER,2020,PKNL,3020,4020,5020,TCUB,6
+FLFACT,3020,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,+
++,1.0,1.0,1.0,1.0,1.0,1.0
+FLFACT,4020,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,+
++,0.2,0.2,0.2,0.2,0.2,0.2
+FLFACT,5020,10.0,20.0,30.0,40.0,50.0,55.0,60.0,65.0,+
++,70.0,75.0,80.0,90.0,100.0,120.0
+ENDDATA

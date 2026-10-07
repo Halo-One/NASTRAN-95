@@ -18,6 +18,9 @@ C
       COMMON   /UNPAKX/  IPRC     ,II      ,NN     ,INCR
       EQUIVALENCE        (KSYSTM(2),IO)    ,(KSYSTM(55),IPREC)
       DATA      ILIM  ,  IEXP   ,BASE /    120, 60,  2.    /
+C HALO: for the non-convergence exit at label 690
+      INTEGER   NSWP  ,  NAMEQ(2)
+      DATA      NAMEQ /  4HFQRW, 4H     /
 C
 C     IACC  =  ACCURACY CONTROL (EPSILON) FOR UNDERFLOW
 C
@@ -45,6 +48,8 @@ C
       TMAX = 0.
       W(M+1) = 0.
       DO 30 I = 1,M
+C HALO: a NaN would spin the QR sweep forever; see FQRWV
+      IF (A(I) .NE. A(I) .OR. B(I) .NE. B(I)) GO TO 690
       IF (BMAX .LT. ABS(B(I))) BMAX = ABS(B(I))
       IF (TMAX .LT. ABS(A(I))) TMAX = ABS(A(I))
    30 CONTINUE
@@ -60,7 +65,11 @@ C
       DELTA= TMAX*SCALE*TOL
       EPS  = DELTA*DELTA
       K  = M
+C HALO: bound the QR passes; see FQRWV
+      NSWP = 0
    70 L  = K
+      NSWP = NSWP + 1
+      IF (NSWP .GT. 200*M + 1000) GO TO 690
       IF (L .LE. 0) GO TO 140
       L1 = L - 1
       DO 80 I = 1,L
@@ -104,6 +113,17 @@ C
       IF (K .LT. L) GO TO 120
       E(K) = GG + SHIFT
       GO TO 70
+C HALO: not converging, or fed a NaN: stop the run with a message.
+C HALO:   See FQRWV label 690 for the story.
+  690 CALL PAGE2 (5)
+      WRITE  (IO,695) UFM,NSWP
+  695 FORMAT (A23,' 2395', /5X,'FEER QR ITERATION ON THE REDUCED ',
+     1       'TRIDIAGONAL MATRIX DID NOT CONVERGE', /5X,'(A NAN IN ',
+     2       'THE MATRIX, OR',I8,' SWEEPS WITHOUT CONVERGENCE).', /5X,
+     3       'THE REDUCTION LOST THE MASS NORM OF A TRIAL VECTOR; ',
+     4       'SEE MESSAGE 2394 AND USE DIAG 16.')
+      CALL MESAGE (-37,0,NAMEQ)
+      RETURN
   140 DO 150 I = 1,M
   150 E(I) = E(I)/SCALE
       DO 155 L = 1,M1

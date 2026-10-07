@@ -1,5 +1,14 @@
 # NASTRAN-95
 
+> **Halo One's fork.** NASA's 1995 release built as two standalone executables for
+> Windows and Linux: `nastran95`, the solver as NASA wrote it, and `nastran95ase`, the
+> same solver behind a front end that reads MSC Nastran's dialect, with SOL 144 static
+> aeroelastic trim, SOL 145 flutter, SOL 146 gust response, SOL 200 and OUTPUT4.
+> [`standalone/README.md`](standalone/README.md) says how to build and run them,
+> [`HALO.md`](HALO.md) identifies every change against NASA's tree (as the NASA Open
+> Source Agreement asks) and records how each was checked, and [`doc/`](doc/) holds the
+> user's and theoretical manuals of `nastran95ase`. NASA's README follows.
+
 NASTRAN has been released under the  
 [NASA Open Source Agreement version 1.3](https://github.com/nasa/NASTRAN-95/raw/master/NASA%20Open%20Source%20Agreement-NASTRAN%2095.doc).
 

@@ -1,0 +1,30 @@
+#!/bin/sh
+#  A stand-in for the licensed solver's launcher (Simcenter Nastran's, MSC's), so
+#  that scripts which call `nastran <deck>` run on the licence-free solver instead.
+#  nastran.bat beside this file is the same thing for Windows.
+#
+#  Nothing uses it unless you ask for it. To switch this shell over:
+#
+#      PATH="$(git rev-parse --show-toplevel)/standalone:$PATH"; export PATH
+#
+#  or, permanently, put this folder AHEAD of the licensed solver's bin directory
+#  on your PATH. To switch back, take it off again.
+#
+#  It works because nastran95ase takes the same command line the licensed launcher
+#  takes - `nastran deck.dat [out=dir]`, plus scr=/bat=/old=/append= accepted and
+#  ignored - reads the same MSC-dialect deck, and writes the print file as
+#  <stem>.out beside the deck, in MSC's layout.
+#
+#  Read README.md in this folder, "The MSC dialect", before trusting a result:
+#  this is the 1995 COSMIC solver with a translator in front of it, not
+#  Simcenter Nastran, and <stem>_xlat.txt records every substitution it made.
+#
+#  It says so on every run, deliberately: someone with a licensed seat who put
+#  this folder on the PATH by accident should not be able to mistake one solver
+#  for the other.
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+echo "[nastran] NASTRAN-95 standalone (nastran95ase), not Simcenter Nastran."
+echo "[nastran] Translation log: <stem>_xlat.txt.  See standalone/README.md."
+exec "$here/nastran95ase" "$@"

@@ -1,0 +1,682 @@
+ 
+ 
+ 
+ 
+ 
+ 
+                                  ****
+                                *      *
+                               *        *
+                               *  N A S T R A N
+                               *        *
+                                *      *
+                                  ****
+ 
+ 
+                             SUN COMPUTER SYSTEMS    
+                                SOLARIS VERSION
+ 
+                          SYSTEM RELEASE -  1995 ED.
+ 
+                                DISTRIBUTED BY
+ 
+         COMPUTER SOFTWARE MANAGEMENT AND INFORMATION CENTER (COSMIC)
+                 UNIVERSITY OF GEORGIA, ATHENS, GEORGIA 30602
+                 PHONE: (706)542-3265      FAX: (706)542-4807
+1                                                                           /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE     2
+                                                                                                                                    
+0                                                                                                                                   
+                                                                                                         
+                                                                                                         
+                         INSTALLATION CENTER USER INFORMATION GIVEN IN THIS SECTION                      
+                                                                                                         
+                                     *********************************************                       
+                                     *                                           *                       
+                                     *  PLEASE READ THE COMMENT IN DEMO PROBLEM  *                       
+                                     *  D01002A ABOUT SYSTEM TIMING CONSTANTS    *                       
+                                     *                                           *                       
+                                     *********************************************                       
+                                                                                                         
+                         ===X=    TOP OF PAGE REQUEST IF 'X' IS REPLACED BY '='                          
+                                                                                                         
+1                                                                           /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE     3
+                                                                                                                                    
+0                                                                                                                                   
+0*** USER INFORMATION MESSAGE 225, GINO TIME CONSTANTS ARE BEING COMPUTED
+     (SEE NASINFO FILE FOR ELIMINATION OF THESE COMPUTATIONS)
+1                                                                           /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE     4
+                                                                                                                                    
+0        N A S T R A N    E X E C U T I V E    C O N T R O L    D E C K    E C H O                                                  
+0                                                                                                                                   
+                                                                                                                                    
+                                                                                                                                    
+     $ translated from MSC dialect by nastran95ase                                   
+     $ this file is written by the solver; edit the MSC deck, not this               
+     ID      HALO,ASE                                                                
+     APP     DMAP                                                                    
+     TIME    600                                                                     
+     BEGIN    $ SOL 144 STATIC AEROELASTIC TRIM, NASTRAN95ASE (FORK SOL144.MD)       
+     (SEE NASTRAN SOURCE PROGRAM COMPILATION FOR LISTING OF DMAP SEQUENCE)
+     END      $                                                                      
+     CEND                                                                            
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE     5
+                                                                                                                                    
+0                                                                                                                                   
+0                                        C A S E    C O N T R O L   D E C K   E C H O                                               
+                 CARD                                                                                                               
+                 COUNT                                                                                                              
+                  1      MAXLINES = 99999999                                                             
+                  2      TITLE = flat plate, SOL 144 static aeroelastic trim and divergence              
+                  3      ECHO = SORT                                                                     
+                  4      SPC = 1                                                                         
+                  5      SUBCASE 1                                                                       
+                  6      SUBTITLE = trim, ANGLEA 0.025 rad, q 980 Pa, Mach 0.1                           
+                  7      DISPLACEMENT = ALL                                                              
+                  8      SUBCASE 2                                                                       
+                  9      SUBTITLE = divergence, Mach 0.1                                                 
+                 10      BEGIN BULK                                                                      
+ 
+ 
+                        (NO. OF UNSORTED BULK DATA CARDS READ =    96, INCLUDING   0 COMMENT CARDS)
+0*** USER INFORMATION MESSAGE 207, BULK DATA DECK IS NOT SORTED. NASTRAN WILL RE-ORDER THE INPUT DECK.
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE     6
+                                                                                                                                    
+0                                                                                                                                   
+                                                  S O R T E D   B U L K   D A T A   E C H O
+                     CARD                                                                                                           
+                     COUNT        ---1--- +++2+++ ---3--- +++4+++ ---5--- +++6+++ ---7--- +++8+++ ---9--- +++10+++                  
+                    1-        AERO    0               0.2     1.0     1       0                               
+                    2-        CAERO1  1001    1       0       8       4                       1       +0000001
+                    3-        +00000010.0     0.0     0.0     0.2     0.0     0.5     0.0     0.2             
+                    4-        CQUAD2  1       1       1       2       7       6                               
+                    5-        CQUAD2  2       1       2       3       8       7                               
+                    6-        CQUAD2  3       1       3       4       9       8                               
+                    7-        CQUAD2  4       1       4       5       10      9                               
+                    8-        CQUAD2  5       1       6       7       12      11                              
+                    9-        CQUAD2  6       1       7       8       13      12                              
+                   10-        CQUAD2  7       1       8       9       14      13                              
+                   11-        CQUAD2  8       1       9       10      15      14                              
+                   12-        CQUAD2  9       1       11      12      17      16                              
+                   13-        CQUAD2  10      1       12      13      18      17                              
+                   14-        CQUAD2  11      1       13      14      19      18                              
+                   15-        CQUAD2  12      1       14      15      20      19                              
+                   16-        CQUAD2  13      1       16      17      22      21                              
+                   17-        CQUAD2  14      1       17      18      23      22                              
+                   18-        CQUAD2  15      1       18      19      24      23                              
+                   19-        CQUAD2  16      1       19      20      25      24                              
+                   20-        CQUAD2  17      1       21      22      27      26                              
+                   21-        CQUAD2  18      1       22      23      28      27                              
+                   22-        CQUAD2  19      1       23      24      29      28                              
+                   23-        CQUAD2  20      1       24      25      30      29                              
+                   24-        CQUAD2  21      1       26      27      32      31                              
+                   25-        CQUAD2  22      1       27      28      33      32                              
+                   26-        CQUAD2  23      1       28      29      34      33                              
+                   27-        CQUAD2  24      1       29      30      35      34                              
+                   28-        CQUAD2  25      1       31      32      37      36                              
+                   29-        CQUAD2  26      1       32      33      38      37                              
+                   30-        CQUAD2  27      1       33      34      39      38                              
+                   31-        CQUAD2  28      1       34      35      40      39                              
+                   32-        CQUAD2  29      1       36      37      42      41                              
+                   33-        CQUAD2  30      1       37      38      43      42                              
+                   34-        CQUAD2  31      1       38      39      44      43                              
+                   35-        CQUAD2  32      1       39      40      45      44                              
+                   36-        EIGR    9997    FEER    0.0                     1                               
+                   37-        GRID    1               0.0     0.0     0.0             126                     
+                   38-        GRID    2               0.05    0.0     0.0             126                     
+                   39-        GRID    3               0.1     0.0     0.0             126                     
+                   40-        GRID    4               0.15    0.0     0.0             126                     
+                   41-        GRID    5               0.2     0.0     0.0             126                     
+                   42-        GRID    6               0.0     0.0625  0.0             126                     
+                   43-        GRID    7               0.05    0.0625  0.0             126                     
+                   44-        GRID    8               0.1     0.0625  0.0             126                     
+                   45-        GRID    9               0.15    0.0625  0.0             126                     
+                   46-        GRID    10              0.2     0.0625  0.0             126                     
+                   47-        GRID    11              0.0     0.125   0.0             126                     
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE     7
+                                                                                                                                    
+ 
+                                                                                                                                    
+ 
+                                                  S O R T E D   B U L K   D A T A   E C H O
+                     CARD                                                                                                           
+                     COUNT        ---1--- +++2+++ ---3--- +++4+++ ---5--- +++6+++ ---7--- +++8+++ ---9--- +++10+++                  
+                   48-        GRID    12              0.05    0.125   0.0             126                     
+                   49-        GRID    13              0.1     0.125   0.0             126                     
+                   50-        GRID    14              0.15    0.125   0.0             126                     
+                   51-        GRID    15              0.2     0.125   0.0             126                     
+                   52-        GRID    16              0.0     0.1875  0.0             126                     
+                   53-        GRID    17              0.05    0.1875  0.0             126                     
+                   54-        GRID    18              0.1     0.1875  0.0             126                     
+                   55-        GRID    19              0.15    0.1875  0.0             126                     
+                   56-        GRID    20              0.2     0.1875  0.0             126                     
+                   57-        GRID    21              0.0     0.25    0.0             126                     
+                   58-        GRID    22              0.05    0.25    0.0             126                     
+                   59-        GRID    23              0.1     0.25    0.0             126                     
+                   60-        GRID    24              0.15    0.25    0.0             126                     
+                   61-        GRID    25              0.2     0.25    0.0             126                     
+                   62-        GRID    26              0.0     0.3125  0.0             126                     
+                   63-        GRID    27              0.05    0.3125  0.0             126                     
+                   64-        GRID    28              0.1     0.3125  0.0             126                     
+                   65-        GRID    29              0.15    0.3125  0.0             126                     
+                   66-        GRID    30              0.2     0.3125  0.0             126                     
+                   67-        GRID    31              0.0     0.375   0.0             126                     
+                   68-        GRID    32              0.05    0.375   0.0             126                     
+                   69-        GRID    33              0.1     0.375   0.0             126                     
+                   70-        GRID    34              0.15    0.375   0.0             126                     
+                   71-        GRID    35              0.2     0.375   0.0             126                     
+                   72-        GRID    36              0.0     0.4375  0.0             126                     
+                   73-        GRID    37              0.05    0.4375  0.0             126                     
+                   74-        GRID    38              0.1     0.4375  0.0             126                     
+                   75-        GRID    39              0.15    0.4375  0.0             126                     
+                   76-        GRID    40              0.2     0.4375  0.0             126                     
+                   77-        GRID    41              0.0     0.5     0.0             126                     
+                   78-        GRID    42              0.05    0.5     0.0             126                     
+                   79-        GRID    43              0.1     0.5     0.0             126                     
+                   80-        GRID    44              0.15    0.5     0.0             126                     
+                   81-        GRID    45              0.2     0.5     0.0             126                     
+                   82-        MAT1    1       7.0E10          0.33    2700.0                                  
+                   83-        MAT1    9990    1.0     1.0             0.0                                     
+                   84-        MKAERO1 0.1                                                             +0000009
+                   85-        +00000091.-4                                                                    
+                   86-        PAERO1  1                                                                       
+                   87-        PQUAD2  1       1       0.002                                                   
+                   88-        PTRIA2  1       1       0.002                                                   
+                   89-        SET1    1       1       2       3       4       5       6       7       +0000003
+                   90-        +00000038       9       10      11      12      13      14      15      +0000004
+                   91-        +000000416      17      18      19      20      21      22      23      +0000005
+                   92-        +000000524      25      26      27      28      29      30      31      +0000006
+                   93-        +000000632      33      34      35      36      37      38      39      +0000007
+                   94-        +000000740      41      42      43      44      45                              
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE     8
+                                                                                                                                    
+ 
+                                                                                                                                    
+ 
+                                                  S O R T E D   B U L K   D A T A   E C H O
+                     CARD                                                                                                           
+                     COUNT        ---1--- +++2+++ ---3--- +++4+++ ---5--- +++6+++ ---7--- +++8+++ ---9--- +++10+++                  
+                   95-        SPC1    1       123456  1       2       3       4       5                       
+                   96-        SPLINE1 1001    1001    1001    1032    1       0.0                             
+                              ENDDATA
+0*** USER INFORMATION MESSAGE, THE FOLLOWING PROPERTY IDS ARE PRESENT BUT NOT USED -
+ 
+             1
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE     9
+                                                                                                                                    
+0                                                                                                                                   
+0         COSMIC / NASTRAN DMAP COMPILER - SOURCE LISTING                                                                           
+                                                                                                                                    
+                                                                                                                                    
+0  OPTIONS IN EFFECT GO      ERR=2   LIST    NODECK  NOREF   NOOSCAR 
+   -----------------
+ 
+ 
+       1  BEGIN    $ SOL 144 STATIC AEROELASTIC TRIM, NASTRAN95ASE (FORK SOL144.MD
+ 
+       2  PARAM    //*MPY*/CARDNO/0/0 $                                           
+ 
+       3  GP1      GEOM1,GEOM2,/GPL,EQEXIN,GPDT,CSTM,BGPDT,SIL/S,N,LUSET/         
+                   S,N,NOGPDT/ALWAYS=-1 $                                         
+ 
+       4  GP2      GEOM2,EQEXIN/ECT $                                             
+ 
+       5  GP3      GEOM3,EQEXIN,GEOM2/SLT,GPTT/NOGRAV $                           
+ 
+       6  TA1      ECT,EPT,BGPDT,SIL,GPTT,CSTM,MPT,EQEXIN/EST,GEI,GPECT,,,MPTX,   
+                   PCOMPS,EPTX/LUSET/S,N,NOSIMP/1/S,N,NOGENL/GENEL/S,N,COMPS $    
+ 
+       7  EQUIV    MPTX,MPT/COMPS/EPTX,EPT/COMPS $                                
+ 
+       8  PARAM    //*ADD*/NOKGGX/1/0 $                                           
+ 
+       9  PARAM    //*ADD*/NOMGG/1/0 $                                            
+ 
+      10  EMG      EST,CSTM,MPT,DIT,GEOM2,/KELM,KDICT,MELM,MDICT,,,/S,N,NOKGGX/   
+                   S,N,NOMGG////C,Y,COUPMASS/C,Y,CPBAR/                           
+                   C,Y,CPROD/C,Y,CPQUAD1/C,Y,CPQUAD2/C,Y,CPTRIA1/C,Y,CPTRIA2/     
+                   C,Y,CPTUBE/C,Y,CPQDPLT/C,Y,CPTRPLT/C,Y,CPTRBSC/                
+                   C,Y,VOLUME/C,Y,SURFACE $                                       
+ 
+      11  PURGE    KGGX/NOKGGX $                                                  
+ 
+      12  COND     JMPKGG,NOKGGX $                                                
+ 
+      13  EMA      GPECT,KDICT,KELM/KGGX $                                        
+ 
+      14  LABEL    JMPKGG $                                                       
+ 
+      15  PURGE    KDICT,KELM/ALWAYS $                                            
+ 
+      16  EMA      GPECT,MDICT,MELM/MGG/-1/C,Y,WTMASS=1.0 $                       
+ 
+      17  PURGE    MDICT,MELM/ALWAYS $                                            
+ 
+      18  COND     LGPWG,GRDPNT $                                                 
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE    10
+                                                                                                                                    
+ 
+                                                                                                                                    
+ 
+          COSMIC / NASTRAN DMAP COMPILER - SOURCE LISTING                                                                           
+                                                                                                                                    
+                                                                                                                                    
+ 
+      19  GPWG     BGPDT,CSTM,EQEXIN,MGG/OGPWG/V,Y,GRDPNT=-1/C,Y,WTMASS $         
+ 
+      20  OFP      OGPWG,,,,,//S,N,CARDNO $                                       
+ 
+      21  LABEL    LGPWG $                                                        
+ 
+      22  EQUIV    KGGX,KGG/NOGENL $                                              
+ 
+      23  COND     LBL11A,NOGENL $                                                
+ 
+      24  SMA3     GEI,KGGX/KGG/LUSET/NOGENL/NOSIMP $                             
+ 
+      25  LABEL    LBL11A $                                                       
+ 
+      26  GPSTGEN  KGG,SIL/GPST $                                                 
+ 
+      27  PARAM    //*MPY*/NSKIP/0/0 $                                            
+ 
+      28  GP4      CASECC,GEOM4,EQEXIN,GPDT,BGPDT,CSTM,GPST/RG,YS,USET,           
+                   ASET,OGPST/LUSET/S,N,MPCF1/S,N,MPCF2/S,N,SINGLE/S,N,OMIT/      
+                   S,N,REACT/S,N,NSKIP/S,N,REPEAT/S,N,NOSET/S,N,NOL/S,N,NOA/      
+                   C,Y,ASETOUT/C,Y,AUTOSPC $                                      
+ 
+      29  OFP      OGPST,,,,,//S,N,CARDNO $                                       
+ 
+      30  PURGE    GM/MPCF1/GO,KOO,LOO,MOO,MOA,PO,UOOV,RUOV/OMIT/KSS,KFS,PS/      
+                   SINGLE $                                                       
+ 
+      31  EQUIV    KGG,KNN/MPCF1/MGG,MNN/MPCF1 $                                  
+ 
+      32  COND     LBL2,MPCF2 $                                                   
+ 
+      33  MCE1     USET,RG/GM $                                                   
+ 
+      34  MCE2     USET,GM,KGG,MGG,,/KNN,MNN,, $                                  
+ 
+      35  LABEL    LBL2 $                                                         
+ 
+      36  EQUIV    KNN,KFF/SINGLE/MNN,MFF/SINGLE $                                
+ 
+      37  COND     LBL3,SINGLE $                                                  
+ 
+      38  SCE1     USET,KNN,MNN,,/KFF,KFS,KSS,MFF,, $                             
+ 
+      39  LABEL    LBL3 $                                                         
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE    11
+                                                                                                                                    
+ 
+                                                                                                                                    
+ 
+          COSMIC / NASTRAN DMAP COMPILER - SOURCE LISTING                                                                           
+                                                                                                                                    
+                                                                                                                                    
+ 
+      40  EQUIV    KFF,KAA/OMIT/MFF,MAA/OMIT $                                    
+ 
+      41  COND     LBL5,OMIT $                                                    
+ 
+      42  SMP1     USET,KFF,MFF,,/GO,KAA,KOO,LOO,MAA,MOO,MOA,, $                  
+ 
+      43  LABEL    LBL5 $                                                         
+ 
+      44  EQUIV    KAA,KLL/REACT/MAA,MLL/REACT $                                  
+ 
+      45  COND     LBLR1,REACT $                                                  
+ 
+      46  RBMG1    USET,KAA,MAA/KLL,KLR,KRR,MLL,MLR,MRR $                         
+ 
+      47  LABEL    LBLR1 $                                                        
+ 
+      48  RBMG2    KLL/LLL $                                                      
+ 
+      49  COND     LBLR2,REACT $                                                  
+ 
+      50  RBMG3    LLL,KLR,KRR/DM $                                               
+ 
+      51  RBMG4    DM,MLL,MLR,MRR/MR $                                            
+ 
+      52  LABEL    LBLR2 $                                                        
+ 
+      53  DPD      DYNAMICS,GPL,SIL,USET/GPLD,SILD,USETD,TFPOOL,,,,,,EED,EQDYN/   
+                   LUSET/S,N,LUSETD/NOTFL/NODLT/NOPSDL/NOFRL/                     
+                   NONLFT/NOTRL/S,N,NOEED/123/S,N,NOUE $                          
+ 
+      54  APD      EDT,EQDYN,ECT,BGPDT,SILD,USETD,CSTM,GPLD/EQAERO,ECTA,BGPA,SILA,
+                   USETA,SPLINE,AERO,ACPT,FLIST,CSTMA,GPLA,SILGA/S,N,NK/S,N,NJ/   
+                   S,N,LUSETA/S,N,BOV $                                           
+ 
+      55  GI       SPLINE,USET,CSTMA,BGPA,SIL,,GM,GO/GTKA/NK/LUSET $              
+ 
+      56  GI       SPLINE,,CSTMA,BGPA,SIL,,,/GTKG/NK/LUSET $                      
+ 
+      57  PARAM    //*ADD*/DESTRY/0/1/ $                                          
+ 
+      58  AMG      AERO,ACPT/AJJL,SKJ,D1JK,D2JK/NK/NJ/S,N,DESTRY $                
+ 
+      59  AETRIM   CASECC,USET,GTKA,,,,,,,,,DM,,,BGPDT,SIL,CSTMA,GPLA,USETA/      
+                   ES,DG,,/1 $                                                    
+ 
+      60  FBS      LLL,,ES/CLS/1/1/2 $                                            
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE    12
+                                                                                                                                    
+ 
+                                                                                                                                    
+ 
+          COSMIC / NASTRAN DMAP COMPILER - SOURCE LISTING                                                                           
+                                                                                                                                    
+                                                                                                                                    
+ 
+      61  COND     LBLR3,REACT $                                                  
+ 
+      62  MPYAD    MLL,DM,MLR/MDL/0/1/1/2 $                                       
+ 
+      63  FBS      LLL,,MDL/XM/1/1/2 $                                            
+ 
+      64  MPYAD    MDL,XM,/MXM/1/1/1/2 $                                          
+ 
+      65  MPYAD    MGG,DG,/MDG/0/1/1/2 $                                          
+ 
+      66  LABEL    LBLR3 $                                                        
+ 
+      67  AETRIM   CASECC,USET,GTKA,GTKG,AJJL,SKJ,D1JK,ACPT,CLS,XM,MXM,DM,MR,MDG, 
+                   BGPDT,SIL,CSTMA,GPLA,USETA/PLA,UDDT,PGT,/2 $                   
+ 
+      68  EQUIV    PLA,PLT/REACT $                                                
+ 
+      69  COND     LBLR4,REACT $                                                  
+ 
+      70  MPYAD    MDL,UDDT,PLA/PLT/0/-1/1/2 $                                    
+ 
+      71  LABEL    LBLR4 $                                                        
+ 
+      72  FBS      LLL,,PLT/ULV/1/1/2 $                                           
+ 
+      73  SSG2     USET,GM,YS,KFS,GO,DM,PGT/QR,PO,PS,PLX $                        
+ 
+      74  SDR1     USET,PGT,ULV,,YS,GO,GM,PS,KFS,KSS,QR/UGV,PGG,QG/NSKIP/         
+                   *STATICS* $                                                    
+ 
+      75  SDR2     CASECC,CSTM,MPT,DIT,EQEXIN,SIL,GPTT,EDT,BGPDT,,QG,UGV,EST,,PGG,
+                   PCOMPS/OPG1,OQG1,OUGV1,OES1,OEF1,PUGV1,OES1L,OEF1L/*STATICS*///
+                   COMPS $                                                        
+ 
+      76  OFP      OUGV1,OPG1,OQG1,OEF1,OES1,//S,N,CARDNO $                       
+ 
+      77  OFP      OEF1L,OES1L,,,,//S,N,CARDNO $                                  
+ 
+      78  END      $                                                              
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE    13
+                                                                                                                                    
+0                                                                                                                                   
+0*** USER INFORMATION MESSAGES FROM RESEQUENCING PROCESSOR - BANDIT     (CRI= 1,  MTH= 3,  MPC= 0,  DEP=-1,  PCH=-1)
+ 
+                               BEFORE RESEQUENCING - - -
+                                        BANDWIDTH            7
+                                        PROFILE            281
+                                        MAX WAVEFRONT        7
+                                        AVG WAVEFRONT    6.244
+                                        RMS WAVEFRONT    6.396
+                                        RMS BANDWIDTH    6.452
+ 
+                               AFTER RESEQUENCING BY GIBBS-POOLE-STOCKMEYER (GPS) ALGORITHM - - -
+                                        BANDWIDTH            7
+                                        PROFILE            281
+                                        MAX WAVEFRONT        7
+                                        AVG WAVEFRONT    6.244
+                                        RMS WAVEFRONT    6.396
+                                        RMS BANDWIDTH    6.452
+ 
+ 
+                                                     *** BANDIT SUMMARY ***
+ 
+                                                                        BEFORE     AFTER
+                                        BANDWIDTH (B)                        7         7
+                                        PROFILE (P)                        281       281
+                                        MAXIMUM WAVEFRONT (C-MAX)            7         7
+                                        AVERAGE WAVEFRONT (C-AVG)        6.244     6.244
+                                        RMS WAVEFRONT (C-RMS)            6.396     6.396
+                                        RMS BANDWITCH (B-RMS)            6.452     6.452
+                                        NUMBER OF GRID POINTS (N)                     45
+                                        NUMBER OF ELEMENTS (NON-RIGID)                32
+                                        NUMBER OF RIGID ELEMENTS PROCESSED*            0
+                                        NUMBER OF MPC  EQUATIONS PROCESSED*            0
+                                        NUMBER OF COMPONENTS                           1
+                                        MAXIMUM NODAL DEGREE                           8
+                                        MINIMUM NODAL DEGREE                           3
+                                        NUMBER OF UNIQUE EDGES                       140
+                                        MATRIX DENSITY, PERCENT                   16.049
+                                        NUMBER OF POINTS OF ZERO DEGREE                0
+                                        BANDIT OPEN CORE                        ********
+                                        CRITERION*                         RMS WAVEFRONT
+                                        METHOD USED*                                 GPS
+ 
+                               (* THESE DEFAULT OPTIONS CAN BE OVERRIDDEN BY THE NASTRAN CARD)
+ 
+ 
+                               BANDIT FINDS GRID POINT RE-SEQUENCING NOT NECESSARY
+0         **NO ERRORS FOUND - EXECUTE NASTRAN PROGRAM**
+0*** USER WARNING MESSAGE 2222, METHOD OF NORMALIZATION ON EIGR CARD NOT SPECIFIED. DEFAULT OF 'MASS' WILL BE USED
+0*** USER INFORMATION MESSAGE 238, TURN DIAG 38 ON FOR ADDITIONAL ELEMENT PROCESSING INFORMATION
+ 
+0*** USER INFORMATION MESSAGE 3113,
+     EMG MODULE PROCESSING DOUBLE PRECISION QUAD2    ELEMENTS (ELEMENT TYPE  18) STARTING WITH ID        1
+0*** SYSTEM WARNING MESSAGE 3022
++                                 (SEE PROG. MANUAL SEC. 4.9.7, OR USERS' MANUAL P. 6.5-3)
+     DATA BLOCK MLR      MAY BE REQUIRED AS INPUT AND IS NOT OUTPUT BY A PREVIOUS MODULE IN THE CURRENT DMAP ROUTE.
+0*** USER INFORMATION MESSAGE 9457 (APD), THE    1 (MACH, K) PAIRS OF THE MKAERO CARDS, SORTED BY MACH THEN K - THE ORDER OF THE AERODYNAMIC MATRIX COLUMNS (QHHL, QHJL, QKHL)
+      PAIR        MACH           K
+         1     0.100000     0.000100
+0*** USER INFORMATION MESSAGE 9650 (AETRIM)
+     SOL 144: the a set has 120 dofs (l 120, r 0), 40 of them splined (the s
+     set); 32 boxes, 64 k-set dofs; 1 trim variables, 2 subcases, 1 Mach
+     number.
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE    14
+      trim, ANGLEA 0.025 rad, q 980 Pa, Mach 0.1                                                                                    
+0                                                                                                            SUBCASE 1              
+ 
+    N O N - D I M E N S I O N A L   S T A B I L I T Y   A N D   C O N T R O L   D E R I V A T I V E   C O E F F I C I E N T S
+ 
+                         CONFIGURATION = AEROSG2D     XY-SYMMETRY = ASYMMETRIC   XZ-SYMMETRY = SYMMETRIC
+                                         MACH = 1.0000E-01                    Q = 9.8000E+02
+                         CHORD = 2.0000E-01           SPAN = 1.0000E+00            AREA = 1.0000E-01
+ 
+ 
+                TRANSFORMATION FROM BASIC TO REFERENCE COORDINATES:
+ 
+              { X }        [  1.0000   0.0000   0.0000  ]  { X }         { 0.0000E+00 }
+              { Y }    =   [  0.0000   1.0000   0.0000  ]  { Y }      +  { 0.0000E+00 }
+              { Z }REF     [  0.0000   0.0000   1.0000  ]  { Z }BAS      { 0.0000E+00 }
+ 
+ 
+ 
+ 
+    CONTROLLER STATE: INTERCEPT ONLY, ALL CONTROLLERS ARE ZERO
+ 
+    TRIM VARIABLE   COEFFICIENT              RIGID                         ELASTIC                          INERTIAL
+                                   UNSPLINED        SPLINED       RESTRAINED      UNRESTRAINED     RESTRAINED      UNRESTRAINED
+ 
+    REF. COEFF.      CX         0.000000E+00    0.000000E+00     0.000000E+00        N/A          0.000000E+00        N/A
+                     CY         0.000000E+00    0.000000E+00     0.000000E+00        N/A          0.000000E+00        N/A
+                     CZ         0.000000E+00    0.000000E+00     0.000000E+00        N/A          0.000000E+00        N/A
+                     CMX        0.000000E+00    0.000000E+00     0.000000E+00        N/A          0.000000E+00        N/A
+                     CMY        0.000000E+00    0.000000E+00     0.000000E+00        N/A          0.000000E+00        N/A
+                     CMZ        0.000000E+00    0.000000E+00     0.000000E+00        N/A          0.000000E+00        N/A
+ 
+    ANGLEA           CX         0.000000E+00    0.000000E+00     0.000000E+00        N/A          0.000000E+00        N/A
+                     CY         0.000000E+00    0.000000E+00     0.000000E+00        N/A          0.000000E+00        N/A
+                     CZ         4.125980E+00    4.125980E+00     5.039527E+00        N/A          0.000000E+00        N/A
+                     CMX        0.000000E+00    0.000000E+00     0.000000E+00        N/A          0.000000E+00        N/A
+                     CMY       -9.813530E-01   -9.813531E-01    -1.247187E+00        N/A          0.000000E+00        N/A
+                     CMZ        0.000000E+00    0.000000E+00     0.000000E+00        N/A          0.000000E+00        N/A
+ 
+ 
+                                               A E R O S T A T I C   D A T A   R E C O V E R Y   O U T P U T   T A B L E S
+                                         CONFIGURATION = AEROSG2D     XY-SYMMETRY = ASYMMETRIC   XZ-SYMMETRY = SYMMETRIC
+                                                           MACH =  1.000000E-01                 Q =  9.800000E+02
+                                         CHORD = 2.0000E-01           SPAN = 1.0000E+00             AREA = 1.0000E-01
+ 
+                     TRIM ALGORITHM USED: LINEAR TRIM SOLUTION WITHOUT REDUNDANT CONTROL SURFACES.
+ 
+ 
+ 
+                                                   AEROELASTIC TRIM VARIABLES
+ 
+                         ID     LABEL               TYPE        TRIM STATUS       VALUE OF UX
+ 
+ 
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE    15
+      trim, ANGLEA 0.025 rad, q 980 Pa, Mach 0.1                                                                                    
+0                                                                                                            SUBCASE 1              
+                                INTERCEPT     RIGID BODY            FIXED      1.000000E+00
+                        501     ANGLEA        RIGID BODY            FIXED      2.500000E-02     RADIANS
+ 
+ 
+                         TRIMMED LOAD RESULTANTS ABOUT THE REFERENCE POINT, IN REFERENCE AXES
+ 
+                                         FX             FY             FZ             MX             MY             MZ
+      AERODYNAMIC (ELASTIC)    0.000000E+00   0.000000E+00   1.234684E+01   0.000000E+00  -6.111216E-01   0.000000E+00
+      INERTIAL (-M U'')        0.000000E+00   0.000000E+00   0.000000E+00   0.000000E+00   0.000000E+00   0.000000E+00
+      SUM                      0.000000E+00   0.000000E+00   1.234684E+01   0.000000E+00  -6.111216E-01   0.000000E+00
+ 
+ 
+                                               A E R O S T A T I C   D A T A   R E C O V E R Y   O U T P U T   T A B L E S
+                                         CONFIGURATION = AEROSG2D     XY-SYMMETRY = ASYMMETRIC   XZ-SYMMETRY = SYMMETRIC
+                                                           MACH =  1.000000E-01                 Q =  9.800000E+02
+                                         CHORD = 2.0000E-01           SPAN = 1.0000E+00             AREA = 1.0000E-01
+ 
+                                                               AERODYNAMIC FORCES ON THE AERODYNAMIC ELEMENTS
+ 
+              GROUP    GRID ID   LABEL           T1                      T2                   T3                    R1                   R2              R3
+                  1       1001    LS       0.000000E+00         0.000000E+00          8.932050E-01         0.000000E+00         1.116506E-02   0.000000E+00
+                  1       1002    LS       0.000000E+00         0.000000E+00          3.930782E-01         0.000000E+00         4.913478E-03   0.000000E+00
+                  1       1003    LS       0.000000E+00         0.000000E+00          2.384227E-01         0.000000E+00         2.980284E-03   0.000000E+00
+                  1       1004    LS       0.000000E+00         0.000000E+00          1.359696E-01         0.000000E+00         1.699620E-03   0.000000E+00
+                  1       1005    LS       0.000000E+00         0.000000E+00          8.950982E-01         0.000000E+00         1.118873E-02   0.000000E+00
+                  1       1006    LS       0.000000E+00         0.000000E+00          4.036788E-01         0.000000E+00         5.045985E-03   0.000000E+00
+                  1       1007    LS       0.000000E+00         0.000000E+00          2.493269E-01         0.000000E+00         3.116586E-03   0.000000E+00
+                  1       1008    LS       0.000000E+00         0.000000E+00          1.459827E-01         0.000000E+00         1.824784E-03   0.000000E+00
+                  1       1009    LS       0.000000E+00         0.000000E+00          9.071840E-01         0.000000E+00         1.133980E-02   0.000000E+00
+                  1       1010    LS       0.000000E+00         0.000000E+00          4.079388E-01         0.000000E+00         5.099235E-03   0.000000E+00
+                  1       1011    LS       0.000000E+00         0.000000E+00          2.527650E-01         0.000000E+00         3.159562E-03   0.000000E+00
+                  1       1012    LS       0.000000E+00         0.000000E+00          1.487204E-01         0.000000E+00         1.859004E-03   0.000000E+00
+                  1       1013    LS       0.000000E+00         0.000000E+00          9.182124E-01         0.000000E+00         1.147766E-02   0.000000E+00
+                  1       1014    LS       0.000000E+00         0.000000E+00          4.015659E-01         0.000000E+00         5.019574E-03   0.000000E+00
+                  1       1015    LS       0.000000E+00         0.000000E+00          2.455793E-01         0.000000E+00         3.069742E-03   0.000000E+00
+                  1       1016    LS       0.000000E+00         0.000000E+00          1.418411E-01         0.000000E+00         1.773014E-03   0.000000E+00
+                  1       1017    LS       0.000000E+00         0.000000E+00          9.129096E-01         0.000000E+00         1.141137E-02   0.000000E+00
+                  1       1018    LS       0.000000E+00         0.000000E+00          3.855660E-01         0.000000E+00         4.819576E-03   0.000000E+00
+                  1       1019    LS       0.000000E+00         0.000000E+00          2.300863E-01         0.000000E+00         2.876079E-03   0.000000E+00
+                  1       1020    LS       0.000000E+00         0.000000E+00          1.296705E-01         0.000000E+00         1.620881E-03   0.000000E+00
+                  1       1021    LS       0.000000E+00         0.000000E+00          8.795655E-01         0.000000E+00         1.099457E-02   0.000000E+00
+                  1       1022    LS       0.000000E+00         0.000000E+00          3.558889E-01         0.000000E+00         4.448611E-03   0.000000E+00
+                  1       1023    LS       0.000000E+00         0.000000E+00          2.054899E-01         0.000000E+00         2.568624E-03   0.000000E+00
+                  1       1024    LS       0.000000E+00         0.000000E+00          1.127307E-01         0.000000E+00         1.409134E-03   0.000000E+00
+                  1       1025    LS       0.000000E+00         0.000000E+00          8.002424E-01         0.000000E+00         1.000303E-02   0.000000E+00
+                  1       1026    LS       0.000000E+00         0.000000E+00          3.031848E-01         0.000000E+00         3.789810E-03   0.000000E+00
+                  1       1027    LS       0.000000E+00         0.000000E+00          1.677509E-01         0.000000E+00         2.096886E-03   0.000000E+00
+                  1       1028    LS       0.000000E+00         0.000000E+00          8.958999E-02         0.000000E+00         1.119875E-03   0.000000E+00
+                  1       1029    LS       0.000000E+00         0.000000E+00          6.254595E-01         0.000000E+00         7.818244E-03   0.000000E+00
+                  1       1030    LS       0.000000E+00         0.000000E+00          2.050437E-01         0.000000E+00         2.563047E-03   0.000000E+00
+                  1       1031    LS       0.000000E+00         0.000000E+00          1.078606E-01         0.000000E+00         1.348258E-03   0.000000E+00
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE    16
+      trim, ANGLEA 0.025 rad, q 980 Pa, Mach 0.1                                                                                    
+0                                                                                                            SUBCASE 1              
+                  1       1032    LS       0.000000E+00         0.000000E+00          5.723205E-02         0.000000E+00         7.154006E-04   0.000000E+00
+ 
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE    17
+      divergence, Mach 0.1                                                                                                          
+0                                                                                                            SUBCASE 2              
+ 
+                                       C O M P L E X   E I G E N V A L U E   S U M M A R Y
+0                ROOT     EXTRACTION                  EIGENVALUE                     FREQUENCY              DAMPING
+                 NO.        ORDER             (REAL)           (IMAG)                (CYCLES)            COEFFICIENT
+                        1          1        0.000000E+00     7.435899E+01           1.183460E+01          0.000000E+00
+                        2          2        0.000000E+00     1.468935E+02           2.337882E+01          0.000000E+00
+                        3          4       -5.824099E+01     3.117196E+02           4.961172E+01          3.736755E-01
+                        4          3        5.824099E+01     3.117196E+02           4.961172E+01         -3.736755E-01
+                        5          6       -9.710833E+01     5.851407E+02           9.312803E+01          3.319144E-01
+                        6          5        9.710833E+01     5.851407E+02           9.312803E+01         -3.319144E-01
+                        7          7        2.458769E+02     8.705775E+02           1.385567E+02         -5.648593E-01
+                        8          8       -2.458769E+02     8.705775E+02           1.385567E+02          5.648593E-01
+                        9         11        1.753955E+02     1.003790E+03           1.597581E+02         -3.494668E-01
+                       10         12       -1.753955E+02     1.003790E+03           1.597581E+02          3.494668E-01
+ 
+ 
+                                        D I V E R G E N C E   S U M M A R Y
+ 
+                                 MACH NUMBER =     0.100000       METHOD = DGEEV, SPLINED SET (40)
+ 
+                                 ROOT           DIVERGENCE                EIGENVALUE
+                                  NO.        DYNAMIC PRESSURE         REAL            IMAGINARY
+ 
+                                   1           5.529259E+03       0.000000E+00      7.435899E+01
+                                   2           2.157769E+04       0.000000E+00      1.468935E+02
+                                  15           1.880324E+06       0.000000E+00      1.371249E+03
+ 
+1     flat plate, SOL 144 static aeroelastic trim and divergence            /    95 SUN SOLARIS NASTRAN    / OCT  7, 26 / PAGE    18
+      trim, ANGLEA 0.025 rad, q 980 Pa, Mach 0.1                                                                                    
+0                                                                                                            SUBCASE 1              
+ 
+                                             D I S P L A C E M E N T   V E C T O R
+ 
+      POINT ID.   TYPE          T1             T2             T3             R1             R2             R3
+             1      G      0.0            0.0            0.0            0.0            0.0            0.0                           
+             2      G      0.0            0.0            0.0            0.0            0.0            0.0                           
+             3      G      0.0            0.0            0.0            0.0            0.0            0.0                           
+             4      G      0.0            0.0            0.0            0.0            0.0            0.0                           
+             5      G      0.0            0.0            0.0            0.0            0.0            0.0                           
+             6      G      0.0            0.0            5.296234E-04   1.654058E-02  -1.926579E-03   0.0                           
+             7      G      0.0            0.0            5.593800E-04   1.685193E-02   2.420784E-04   0.0                           
+             8      G      0.0            0.0            5.267092E-04   1.597458E-02   1.012803E-03   0.0                           
+             9      G      0.0            0.0            4.624551E-04   1.418121E-02   1.794543E-03   0.0                           
+            10      G      0.0            0.0            3.405945E-04   1.126932E-02   3.549722E-03   0.0                           
+            11      G      0.0            0.0            1.994185E-03   2.966591E-02  -9.015338E-04   0.0                           
+            12      G      0.0            0.0            1.981842E-03   2.829150E-02   1.354724E-03   0.0                           
+            13      G      0.0            0.0            1.878702E-03   2.690242E-02   2.736545E-03   0.0                           
+            14      G      0.0            0.0            1.708070E-03   2.533829E-02   4.109751E-03   0.0                           
+            15      G      0.0            0.0            1.449428E-03   2.371653E-02   6.291097E-03   0.0                           
+            16      G      0.0            0.0            4.119562E-03   3.805450E-02   1.378642E-03   0.0                           
+            17      G      0.0            0.0            4.007730E-03   3.629518E-02   3.074666E-03   0.0                           
+            18      G      0.0            0.0            3.817986E-03   3.488558E-02   4.475961E-03   0.0                           
+            19      G      0.0            0.0            3.559896E-03   3.368934E-02   5.852867E-03   0.0                           
+            20      G      0.0            0.0            3.223939E-03   3.281034E-02   7.615477E-03   0.0                           
+            21      G      0.0            0.0            6.657622E-03   4.300137E-02   3.768036E-03   0.0                           
+            22      G      0.0            0.0            6.441760E-03   4.143899E-02   4.865599E-03   0.0                           
+            23      G      0.0            0.0            6.170849E-03   4.023949E-02   5.940263E-03   0.0                           
+            24      G      0.0            0.0            5.847293E-03   3.935513E-02   6.993314E-03   0.0                           
+            25      G      0.0            0.0            5.467514E-03   3.882788E-02   8.206628E-03   0.0                           
+            26      G      0.0            0.0            9.427208E-03   4.552162E-02   5.737304E-03   0.0                           
+            27      G      0.0            0.0            9.125010E-03   4.432521E-02   6.359490E-03   0.0                           
+            28      G      0.0            0.0            8.788720E-03   4.342596E-02   7.065500E-03   0.0                           
+            29      G      0.0            0.0            8.417972E-03   4.280622E-02   7.751739E-03   0.0                           
+            30      G      0.0            0.0            8.011776E-03   4.248592E-02   8.495581E-03   0.0                           
+            31      G      0.0            0.0            1.230163E-02   4.640153E-02   7.136841E-03   0.0                           
+            32      G      0.0            0.0            1.193763E-02   4.561936E-02   7.433805E-03   0.0                           
+            33      G      0.0            0.0            1.155506E-02   4.503430E-02   7.846113E-03   0.0                           
+            34      G      0.0            0.0            1.115263E-02   4.464113E-02   8.238231E-03   0.0                           
+            35      G      0.0            0.0            1.073058E-02   4.445168E-02   8.639992E-03   0.0                           
+            36      G      0.0            0.0            1.520132E-02   4.636357E-02   7.946894E-03   0.0                           
+            37      G      0.0            0.0            1.480083E-02   4.597629E-02   8.087882E-03   0.0                           
+            38      G      0.0            0.0            1.439021E-02   4.566072E-02   8.325512E-03   0.0                           
+            39      G      0.0            0.0            1.396862E-02   4.543772E-02   8.530822E-03   0.0                           
+            40      G      0.0            0.0            1.353718E-02   4.532186E-02   8.719133E-03   0.0                           
+            41      G      0.0            0.0            1.809318E-02   4.622332E-02   8.317919E-03   0.0                           
+            42      G      0.0            0.0            1.767552E-02   4.602575E-02   8.406323E-03   0.0                           
+            43      G      0.0            0.0            1.724964E-02   4.583261E-02   8.598217E-03   0.0                           
+            44      G      0.0            0.0            1.681634E-02   4.566875E-02   8.715557E-03   0.0                           
+            45      G      0.0            0.0            1.637821E-02   4.557127E-02   8.814787E-03   0.0                           
+ 
+ 
+ 
+ 
+                                        * * * END OF JOB * * *
+1
+ JOB TITLE =  flat plate, SOL 144 static aeroelastic trim and divergence         
+ DATE: 10/ 7/26
+ END TIME: 15:17:10
+ TOTAL WALL CLOCK TIME      0 SEC.
+ 

@@ -61,6 +61,32 @@ CDIR$ VECTOR
         INDEXB     = ( IBLKC( 5 ) - 1 ) * IBLKC( 14 ) + 1                       
 130     IBLKC( 4 ) = IROW                                                       
 140     IF ( ITYPIN .NE. ITYPOT ) GO TO 1400                                    
+C HALO: A RUN OF NONZERO ELEMENTS IN ONE COPY WHEN THEY NEED NO
+C HALO: CONVERSION AND LIE WORD AFTER WORD AT BOTH ENDS (INCR 1, THE
+C HALO: STRING'S STRIDE ONE ELEMENT): AS MANY AS ARE NONZERO FROM HERE
+C HALO: ON (N95NZR, THE TEST OF LOOP 110 FOR EACH), NO MORE THAN THE
+C HALO: STRING HAS ROOM FOR OR LASROW ALLOWS. THE COUNTS, INDEXB AND
+C HALO: THE STRING'S CLOSING ARE THE LOOP'S; 150 THEN STEPS PAST THE
+C HALO: LAST ELEMENT OF THE RUN.
+        IF ( INCR .NE. 1 .OR. IBLKC( 11 ) .NE. NWDIN ) GO TO 139
+        NMAX = MIN0( IBLKC( 6 ) - IBLKC( 7 ), LASROW - IROW + 1 )
+        IF ( NMAX .LE. 1 ) GO TO 139
+        NC = N95NZR( A( INDEXA+1 ), NWDIN, NMAX )
+        IF ( NC .LE. 1 ) GO TO 139
+        CALL N95CPW( IBASE( INDEXB ), A( INDEXA+1 ), NC*NWDIN )
+        IEOR       = 0
+        INDEXB     = INDEXB + NC*IBLKC( 11 )
+        IBLKC( 7 ) = IBLKC( 7 ) + NC
+        IBLKC(10 ) = IBLKC( 10 ) + NC*IBLKC( 11 )
+        INDEXA     = INDEXA + ( NC-1 )*NWDIN
+        IROW       = IROW + NC - 1
+        IF ( IBLKC( 7 ) .LT. IBLKC( 6 ) ) GO TO 150
+        CALL ENDPUT( IBLKC )
+        CALL PUTSTR( IBLKC )
+        IBLKC( 7 ) = 0
+        INDEXB = ( IBLKC( 5 ) - 1 ) * IBLKC( 14 ) + 1
+        GO TO 150
+139     CONTINUE
 CDIR$ NOVECTOR                                                                  
         DO 141 K = 1, NWDIN                                                     
         IBASE( INDEXB + K - 1 ) = A( INDEXA + K )                               

@@ -1,0 +1,514 @@
+/* HALO: executive and case control, MSC to COSMIC.
+ *
+ * MSC says what to solve with one number: SOL 103. The 1970s input says
+ * it with three cards -- APP DISPLACEMENT, SOL 3,0, TIME -- and calls
+ * the solutions rigid formats. The mapping is nearly one to one because
+ * MSC's numbering grew out of this one: 101 is rigid format 1, 103 is
+ * 3, 105 is 5, and the hundreds digit is the superelement generation
+ * that COSMIC never had.
+ *
+ * Case control is closer still: both read TITLE, SPC, METHOD, LOAD,
+ * DISPLACEMENT, SET and SUBCASE, with the same meaning. What MSC has
+ * added since 1995 -- RESVEC, ANALYSIS, WEIGHTCHECK, the parenthesised
+ * output options -- is dropped with a message naming each one, because
+ * a dropped output request is invisible in the results otherwise.
+ */
+#include "msc.h"
+#include "msctrim.h"
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+    int         sol;        /* MSC solution number                       */
+    const char *name;       /* and its word form                         */
+    const char *app;        /* COSMIC APP card                           */
+    int         rf;         /* COSMIC rigid format                       */
+    const char *what;       /* for the message                           */
+} sol_map;
+
+static const sol_map sols[] = {
+    { 101, "SESTATIC", "DISPLACEMENT",  1, "linear statics" },
+    { 103, "SEMODES",  "DISPLACEMENT",  3, "normal modes" },
+    { 105, "SEBUCKL",  "DISPLACEMENT",  5, "buckling" },
+    { 107, "SEDCEIG",  "DISPLACEMENT",  7, "direct complex eigenvalues" },
+    { 108, "SEDFREQ",  "DISPLACEMENT",  8, "direct frequency response" },
+    { 109, "SEDTRAN",  "DISPLACEMENT",  9, "direct transient response" },
+    { 110, "SEMCEIG",  "DISPLACEMENT", 10, "modal complex eigenvalues" },
+    { 111, "SEMFREQ",  "DISPLACEMENT", 11, "modal frequency response" },
+    { 112, "SEMTRAN",  "DISPLACEMENT", 12, "modal transient response" },
+    { 144, "AESTAT",   "DMAP",       144, "static aeroelastic trim" },
+    { 145, "SEFLUTTR", "AERO",         10, "flutter" },
+    { 146, "SEAERO",   "AERO",         11, "gust response" },
+    {   1, NULL,       "DISPLACEMENT",  1, "linear statics" },
+    {   3, NULL,       "DISPLACEMENT",  3, "normal modes" },
+    {   0, NULL, NULL, 0, NULL }
+};
+
+/* MSC solutions with no 1970s equivalent, named so the message can say
+ * what the deck asked for rather than "unknown solution".              */
+static const sol_map no_map[] = {
+    { 106, "NLSTATIC", NULL, 0, "nonlinear statics" },
+    { 129, "NLTRAN",   NULL, 0, "nonlinear transient" },
+    { 153, NULL,       NULL, 0, "nonlinear heat transfer" },
+    { 159, NULL,       NULL, 0, "transient heat transfer" },
+    { 400, NULL,       NULL, 0, "nonlinear (Marc)" },
+    { 401, NULL,       NULL, 0, "nonlinear (SOL 401)" },
+    { 402, NULL,       NULL, 0, "nonlinear (SOL 402)" },
+    {   0, NULL, NULL, 0, NULL }
+};
+
+int msc_sol_lookup(int sol, const char *name, const char **app, int *rf,
+                   const char **what)
+{
+    int i;
+    for (i = 0; sols[i].app; i++) {
+        if ((sol > 0 && sols[i].sol == sol) ||
+            (name && *name && sols[i].name && msc_streq(name, sols[i].name))) {
+            *app  = sols[i].app;
+            *rf   = sols[i].rf;
+            *what = sols[i].what;
+            return 0;
+        }
+    }
+    for (i = 0; no_map[i].sol; i++) {
+        if (sol > 0 && no_map[i].sol == sol) {
+            *what = no_map[i].what;
+            return 2;      /* known, and known to be impossible here     */
+        }
+    }
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* case control                                                        */
+
+/* commands NASTRAN-95 reads with the same meaning */
+static const char *case_keep[] = {
+    "TITLE", "SUBTITLE", "SUBTITL", "LABEL", "ECHO", "MAXLINES", "LINES",
+    "SPC", "MPC", "LOAD", "DEFORM", "TEMPERATURE", "TEMP",
+    "METHOD", "CMETHOD", "FMETHOD", "SDAMPING", "FREQUENCY", "OFREQUENCY", "TSTEP",
+    "DLOAD", "IC", "NONLINEAR", "GUST", "RANDOM",
+    "XYPRINT", "XYPLOT", "XYPEAK", "XYPAPLOT", "XTITLE", "YTITLE",
+    "XAXIS", "YAXIS", "XGRID", "YGRID", "TCURVE", "CURVELINESYMBOL",
+    "DISPLACEMENT", "VELOCITY", "ACCELERATION", "SPCFORCES", "OLOAD",
+    "AEROF", "AEROFORCE",
+    "STRESS", "ELFORCE", "FORCE", "SET", "SUBCASE", "SUBCOM",
+    "SUBSEQ", "SYMMETRY", "REPCASE", "OUTPUT", "AXISYMMETRIC",
+    "MODES", "SVECTOR", "THERMAL", "FLUX", "TRIM",
+    "K2PP", "B2PP", "M2PP", "TFL",
+    NULL
+};
+
+/* AEROF seen in the case control being written (APRES then goes)      */
+static int seen_aerof = 0;
+
+/* commands that are MSC's and mean nothing to the 1970s solver. Each
+ * is listed with what its absence costs, because "dropped" on its own
+ * is not enough to judge whether the answer is still the right one.   */
+typedef struct { const char *name; const char *cost; } case_drop;
+
+static const case_drop case_drops[] = {
+    { "RESVEC",      "MSC adds residual vectors to a modal basis by default; "
+                     "NASTRAN-95 never did, so both codes now use the modes "
+                     "alone" },
+    { "ANALYSIS",    "the analysis type inside a SOL 200 design cycle; the "
+                     "optimiser reads it separately" },
+    { "WEIGHTCHECK", "a printed mass summary, not a result" },
+    { "GROUNDCHECK", "a printed rigid-body check, not a result" },
+    { "AUTOSPC",     "the front end applies the equivalent constraints and "
+                     "reports them" },
+    { "MEFFMASS",    "modal effective mass is printed, not solved for" },
+    { "MODALSE",     "modal strain energy output" },
+    { "SDISPLACEMENT", "the modal coordinates printed per output time; the "
+                     "response itself is unaffected (UFM 614 in the solver)" },
+    { "ESE",         "element strain energy output, which the 1970s solver "
+                     "does not compute; the modes and frequencies are "
+                     "unaffected" },
+    { "ECHOON",      "input echo control" },
+    { "ECHOOFF",     "input echo control" },
+    { "DESOBJ",      "the design objective, read by the SOL 200 driver" },
+    { "DESSUB",      "subcase design constraints, read by the driver" },
+    { "DESGLB",      "global design constraints, read by the driver" },
+    { "DSAPRT",      "sensitivity print control" },
+    { "SEALL",       "superelement processing, which this solver has none of" },
+    { "SUPER",       "superelement selection" },
+    { "K2GG",        "direct matrix input to g-set stiffness" },
+    { "M2GG",        "direct matrix input to g-set mass" },
+    { "B2GG",        "direct matrix input to g-set damping" },
+    { NULL, NULL }
+};
+
+/* split "DISPLACEMENT(SORT2,PHASE) = ALL" into name, options, value */
+static void split_case(const char *line, char *name, char *opts, char *val)
+{
+    const char *p = line;
+    char       *o = name;
+    int         n = 0;
+
+    name[0] = opts[0] = val[0] = '\0';
+    while (*p && isspace((unsigned char) *p)) p++;
+    while (*p && !isspace((unsigned char) *p) && *p != '(' && *p != '=') {
+        if (n < MSC_FLDLEN * 2 - 1) { *o++ = (char) toupper((unsigned char) *p); n++; }
+        p++;
+    }
+    *o = '\0';
+    while (*p && isspace((unsigned char) *p)) p++;
+    if (*p == '(') {
+        const char *q = strchr(p, ')');
+        size_t      k;
+        p++;
+        k = q ? (size_t) (q - p) : strlen(p);
+        if (k > MSC_LINELEN - 1) k = MSC_LINELEN - 1;
+        memcpy(opts, p, k);
+        opts[k] = '\0';
+        p = q ? q + 1 : p + k;
+    }
+    while (*p && (isspace((unsigned char) *p) || *p == '=')) p++;
+    strncpy(val, p, MSC_LINELEN - 1);
+    val[MSC_LINELEN - 1] = '\0';
+    msc_trim(val);
+}
+
+/* whether a case control line ends with a comma, ignoring blanks */
+static int ends_with_comma(const char *s)
+{
+    size_t k = strlen(s);
+    while (k > 0 && (s[k - 1] == ' ' || s[k - 1] == '\t' ||
+                     s[k - 1] == '\r' || s[k - 1] == '\n')) k--;
+    return k > 0 && s[k - 1] == ',';
+}
+
+/* NASTRAN reads a case control command by as much of its name as is
+ * unambiguous, and every deck in the wild uses the short forms: DISP,
+ * SPCF, ELFO, SUBT. So a name matches when it is a prefix of a known
+ * command and is at least four characters, which is the rule the
+ * solver's own parser uses.                                           */
+static const char *match_name(const char *n, const char **list)
+{
+    int i;
+    size_t k = strlen(n);
+    for (i = 0; list[i]; i++) if (msc_streq(n, list[i])) return list[i];
+    if (k < 4) return NULL;
+    for (i = 0; list[i]; i++)
+        if (strncmp(n, list[i], k) == 0) return list[i];
+    return NULL;
+}
+
+static int in_names(const char *n, const char **list)
+{
+    return match_name(n, list) != NULL;
+}
+
+/* Ids the translation renumbered (over 2^24-1: mscxlat.c's small_id),
+ * old -> new. The case control names grids and elements in two places,
+ * the id lists of SET commands and the points of the XY output requests
+ * (XYPRINT DISP PSDF / 99999999(T3)), and both have to follow the bulk
+ * data. Otherwise the solver looks for a point that is not there: an XY
+ * request for one stops RANDOM in RAND2 (SFM 3002, "a plot request for a
+ * point that does not exist"), and a SET that names one prints nothing
+ * for it. As many as the translation made (a table of 1,024 dropped
+ * the rest until 2026-10). The renumbering keeps the ids' order, so a
+ * THRU range whose ends are both renumbered ids still holds the same
+ * points; one bounded by an id the deck does not have is warned about. */
+#define CASE_ID_LIMIT 16777215
+static msc_map case_remap_map;
+
+void msc_case_remap_clear(void) { msc_map_free(&case_remap_map); }
+
+void msc_case_remap(int old_id, int new_id)
+{
+    msc_map_put(&case_remap_map, old_id, new_id);
+}
+
+/* Copy s to out with every renumbered id on its new number, and return
+ * how many were changed. An id is a run of digits standing alone: not
+ * part of a name (T3), a real number (1.5, 2E3) or a signed value. With
+ * xy, only a point of an XY request counts: after the first "/" (before
+ * it are the plot and vector names), followed by "(" (its components).
+ * With skip_first the first id is left alone (a SET's own number).
+ * *thru_big is set when a number over the limit that the bulk data does
+ * not have bounds a THRU range: there is no new number for that end.
+ * A range between two renumbered ids holds the same points as before,
+ * since the renumbering keeps the order.                              */
+static int remap_ids(const char *s, char *out, size_t cap, int xy,
+                     int skip_first, int *thru_big)
+{
+    const char *from = s, *p = s;
+    size_t      o = 0;
+    int         changed = 0, first = 1;
+
+    if (xy) {
+        from = strchr(s, '/');
+        if (!from) from = s + strlen(s);
+    }
+    while (*p && o + 1 < cap) {
+        if (p >= from && isdigit((unsigned char) *p) &&
+            (p == s || !(isalnum((unsigned char) p[-1]) || p[-1] == '.' ||
+                         p[-1] == '+' || p[-1] == '-'))) {
+            const char *q = p, *r;
+            long        v;
+            int         is_first = first;
+            msc_slot   *hit = NULL;
+            while (isdigit((unsigned char) *q)) q++;
+            first = 0;
+            if (isalpha((unsigned char) *q) || *q == '.') {
+                while (p < q && o + 1 < cap) out[o++] = *p++;
+                continue;
+            }
+            r = q;
+            while (*r == ' ' || *r == '\t') r++;
+            v = strtol(p, NULL, 10);
+            if (v > CASE_ID_LIMIT && thru_big &&
+                (v > 2147483647L || !msc_map_has(&case_remap_map, (int) v)) &&
+                (strncmp(r, "THRU", 4) == 0 || strncmp(r, "thru", 4) == 0 ||
+                 (p - s >= 5 && (strncmp(p - 5, "THRU ", 5) == 0 ||
+                                 strncmp(p - 5, "thru ", 5) == 0))))
+                *thru_big = 1;
+            if ((!xy || *r == '(') && !(skip_first && is_first) &&
+                case_remap_map.n > 0 && v <= 2147483647L)
+                hit = msc_map_slot(&case_remap_map, (int) v, 0);
+            if (hit) {
+                char buf[16];
+                int  n = sprintf(buf, "%d", hit->iv);
+                if (o + (size_t) n + 1 < cap) {
+                    memcpy(out + o, buf, (size_t) n);
+                    o += (size_t) n;
+                }
+                changed++;
+                p = q;
+            } else {
+                while (p < q && o + 1 < cap) out[o++] = *p++;
+            }
+            continue;
+        }
+        out[o++] = *p++;
+    }
+    out[o] = '\0';
+    return changed;
+}
+
+/* the line with its renumbered ids, and a warning for a THRU range the
+ * renumbering cannot follow                                           */
+static const char *case_ids(const char *s, char *out, size_t cap, int xy,
+                            int skip_first)
+{
+    int thru_big = 0;
+    remap_ids(s, out, cap, xy, skip_first, &thru_big);
+    if (thru_big)
+        msc_msg(MSC_WARN, 9105,
+            "case control: a THRU range is bounded by an id over %d, which\n"
+            "NASTRAN-95 cannot hold. The ids renumbered inside the range are\n"
+            "not in it any more; list them one by one.\n"
+            "LINE  %s", CASE_ID_LIMIT, s);
+    return out;
+}
+
+/* Write the case control, translated. Returns the SPC set the deck
+ * selects, or 0, through *spc_sel.                                    */
+void msc_case_write(FILE *fp, msc_deck *d, int *spc_sel, int *method_sel,
+                    int suppress_spc, int suppress_title)
+{
+    char name[MSC_FLDLEN * 2], opts[MSC_LINELEN], val[MSC_LINELEN];
+    char ids[MSC_LINELEN * 2];
+    const char *full;
+    int  i, j, cont = 0;
+
+    *spc_sel = 0;
+    *method_sel = 0;
+    seen_aerof = 0;
+
+    for (i = 0; i < d->ncase; i++) {
+        /* the continuation lines of a SET (a trailing comma continues
+         * it onto the next line, in both dialects) are ids, not
+         * commands, and go through as written but for the renumbered
+         * ids                                                         */
+        if (cont) {
+            const char *p = d->cases[i];
+            while (*p == ' ' || *p == '\t') p++;
+            fprintf(fp, "     %s\n", case_ids(p, ids, sizeof(ids), 0, 0));
+            cont = ends_with_comma(p);
+            continue;
+        }
+        split_case(d->cases[i], name, opts, val);
+        if (!name[0]) continue;
+
+        /* SOL 144: the TRIM set of each subcase was read already
+         * (msctrim.c, aet_case_scan) and goes to the AETRIM module, not
+         * to the solver's case control; the SUPORT1 set is always in
+         * force (SUPORT1 became SUPORT)                                 */
+        if (aet_g.active) {
+            if (msc_streq(name, "TRIM")) continue;
+            /* HALO: the DIVERG set of each subcase was read already too;
+             * AETRIM finds the divergence roots itself (all of them, on
+             * the splined set), so CMETHOD's EIGC has no part           */
+            if (msc_streq(name, "DIVERG")) continue;
+            if (msc_streq(name, "CMETHOD")) {
+                msc_msg(MSC_INFO, 9679,
+                    "case control CMETHOD = %s: SOL 144's divergence roots are found\n"
+                    "by AETRIM on the splined set (every root, LAPACK DGEEV), not by\n"
+                    "a complex eigensolver; the EIGC is not used.", val);
+                continue;
+            }
+            /* the box pressures and forces at trim: AETRIM prints them   */
+            if (msc_streq(name, "APRES") || msc_streq(name, "APRESSURE")) {
+                aet_g.want_apres = !msc_streq(val, "NONE");
+                continue;
+            }
+            if (msc_streq(name, "AEROF") || msc_streq(name, "AEROFORCE")) {
+                aet_g.want_aerof = !msc_streq(val, "NONE");
+                continue;
+            }
+            if (msc_streq(name, "SUPORT1") || msc_streq(name, "SUPORT")) {
+                msc_msg(MSC_INFO, 9116,
+                    "case control %s = %s: the SUPORT1 cards became SUPORT, which\n"
+                    "NASTRAN-95 always applies; the request is not needed.", name, val);
+                continue;
+            }
+        }
+
+
+        /* the aerodynamic pressures and forces on the boxes: MSC prints
+         * them on two requests (APRES, AEROF); NASTRAN-95 has one, AEROF,
+         * and its ADR module prints both together per flutter root of a
+         * marked loop (AERODYNAMIC LOADS, unit dynamic pressure). APRES
+         * becomes AEROF, or goes when AEROF is asked for already       */
+        if (msc_streq(name, "APRES") || msc_streq(name, "APRESSURE")) {
+            if (seen_aerof) {
+                msc_msg(MSC_INFO, 9104,
+                    "case control %s: NASTRAN-95's AEROF prints the aerodynamic\n"
+                    "pressures and forces together, and the deck asks for AEROF\n"
+                    "already; dropped.", name);
+                continue;
+            }
+            msc_msg(MSC_INFO, 9104,
+                "case control %s = %s became AEROF = %s: NASTRAN-95 prints the\n"
+                "aerodynamic pressures and forces on the boxes together (ADR,\n"
+                "AERODYNAMIC LOADS, per unit dynamic pressure) for the roots of\n"
+                "the flutter loops a negative FLFACT velocity marks.", name, val, val);
+            fprintf(fp, "AEROF = %s\n", val);
+            seen_aerof = 1;
+            continue;
+        }
+        if (msc_streq(name, "AEROF") || msc_streq(name, "AEROFORCE")) {
+            if (seen_aerof) continue;              /* an APRES wrote it already */
+            seen_aerof = 1;
+        }
+
+        for (j = 0; case_drops[j].name; j++) {
+            if (msc_streq(name, case_drops[j].name)) {
+                msc_msg(MSC_INFO, 9101,
+                        "case control %s is MSC's and has no NASTRAN-95 form;\n"
+                        "dropped. What it did: %s.",
+                        name, case_drops[j].cost);
+                break;
+            }
+        }
+        if (case_drops[j].name) continue;
+
+        full = match_name(name, case_keep);
+        if (!full) {
+            msc_msg(MSC_WARN, 9102,
+                "case control %s is not one this front end knows. It is left\n"
+                "out of the translated deck; if it changes the answer rather\n"
+                "than the printout, the result is not comparable.\n"
+                "LINE  %s", name, d->cases[i]);
+            continue;
+        }
+
+        /* from here the command is written under its full name, so a
+         * deck that says DISP and one that says DISPLACEMENT produce
+         * the same translated deck                                    */
+        strcpy(name, full);
+        if (msc_streq(name, "SPC"))    *spc_sel    = atoi(val);
+        if (msc_streq(name, "METHOD")) *method_sel = atoi(val);
+        if (msc_streq(name, "SPC")   && suppress_spc)   continue;
+        if (msc_streq(name, "TITLE") && suppress_title) continue;
+
+        /* the XY output requests are the 1970s solver's own language
+         * (XYPRINT DISP PSDF / 12(T3)) and go through as written, as does
+         * OUTPUT(XYPLOT) / OUTPUT(XYOUT) that opens them, but for the
+         * renumbered points                                             */
+        if (strncmp(name, "XY", 2) == 0 || msc_streq(name, "XTITLE") ||
+            msc_streq(name, "YTITLE") || msc_streq(name, "XAXIS") ||
+            msc_streq(name, "YAXIS") || msc_streq(name, "XGRID") ||
+            msc_streq(name, "YGRID") || msc_streq(name, "TCURVE") ||
+            msc_streq(name, "CURVELINESYMBOL")) {
+            const char *p = d->cases[i];
+            while (*p == ' ' || *p == '\t') p++;
+            fprintf(fp, "%s\n", case_ids(p, ids, sizeof(ids), 1, 0));
+            continue;
+        }
+        if (msc_streq(name, "OUTPUT") && opts[0]) {
+            char up[MSC_LINELEN];
+            strncpy(up, opts, sizeof(up) - 1);
+            up[sizeof(up) - 1] = '\0';
+            msc_upper(up);
+            if (strstr(up, "XY")) {
+                fprintf(fp, "OUTPUT(%s)\n", up);
+                continue;
+            }
+        }
+        /* the parenthesised options are MSC's; SORT2 is the only one
+         * the 1970s output has a form of, and it is spelled the same  */
+        if (opts[0]) {
+            char up[MSC_LINELEN];
+            strncpy(up, opts, sizeof(up) - 1);
+            up[sizeof(up) - 1] = '\0';
+            msc_upper(up);
+            if (strstr(up, "SORT2")) {
+                fprintf(fp, "%s(SORT2) = %s\n", name, val);
+                continue;
+            }
+            msc_msg(MSC_INFO, 9103,
+                    "%s(%s): the options are MSC's and are dropped; the "
+                    "request itself is kept.", name, opts);
+        }
+        /* SET n = list: the set number is part of the command, not a
+         * value (SET = 103 = ... is UFM 614), and a list that runs on
+         * continues on the lines that follow                        */
+        if (msc_streq(name, "SET")) {
+            fprintf(fp, "SET %s\n", case_ids(val, ids, sizeof(ids), 0, 1));
+            cont = ends_with_comma(val);
+            continue;
+        }
+        if (msc_streq(name, "SUBCASE") || msc_streq(name, "OUTPUT"))
+            fprintf(fp, "%s %s\n", name, val);
+        else if (val[0])
+            fprintf(fp, "%s = %s\n", name, val);
+        else
+            fprintf(fp, "%s\n", name);
+    }
+}
+
+/* Whether the case control already asks for something to be printed;
+ * a deck that asks for nothing gets DISPLACEMENT = ALL, because a run
+ * with no output is never what anyone meant.                          */
+int msc_case_has_output(msc_deck *d)
+{
+    static const char *out[] = { "DISPLACEMENT", "VELOCITY", "ACCELERATION",
+                                 "SPCFORCES", "OLOAD", "STRESS", "ELFORCE",
+                                 "FORCE", "ESE", "SVECTOR", "THERMAL",
+                                 "FLUX", NULL };
+    char name[MSC_FLDLEN * 2], opts[MSC_LINELEN], val[MSC_LINELEN];
+    int  i;
+    for (i = 0; i < d->ncase; i++) {
+        split_case(d->cases[i], name, opts, val);
+        if (in_names(name, out)) return 1;
+    }
+    return 0;
+}
+
+int msc_case_find(msc_deck *d, const char *want, char *val_out)
+{
+    char name[MSC_FLDLEN * 2], opts[MSC_LINELEN], val[MSC_LINELEN];
+    int  i;
+    for (i = 0; i < d->ncase; i++) {
+        split_case(d->cases[i], name, opts, val);
+        if (msc_streq(name, want)) {
+            if (val_out) strcpy(val_out, val);
+            return 1;
+        }
+    }
+    return 0;
+}

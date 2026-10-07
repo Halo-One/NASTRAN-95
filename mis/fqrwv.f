@@ -26,6 +26,9 @@ C
       COMMON  /UNPAKX/ IPRC     ,II      ,NN     ,INCR
       EQUIVALENCE      (KSYSTM(2),IO)    ,(KSYSTM(55),IPREC)
       DATA     ILIM  , IEXP    ,BASE /    120, 60, 2.D0      /
+C HALO: for the non-convergence exit at label 690
+      INTEGER  NSWP  , NAMEQ(2)
+      DATA     NAMEQ / 4HFQRW, 4HV    /
 C
 C     IACC =  MACHINE ACCURACY CONTROL (EPSILON)
 C     IACC IS USED TO CONTROL NUMBER UNDERFLOW
@@ -57,6 +60,10 @@ C
       TMAX = 0.D0
       W(M+1) = 0.D0
       DO 30 I = 1,M
+C HALO: a NaN in the tridiagonal matrix would spin the QR sweep below
+C HALO:   forever (every exit test is a comparison a NaN fails); stop
+C HALO:   here with a message instead
+      IF (A(I) .NE. A(I) .OR. B(I) .NE. B(I)) GO TO 690
       IF (BMAX .LT. DABS(B(I))) BMAX = DABS(B(I))
       IF (TMAX .LT. DABS(A(I))) TMAX = DABS(A(I))
    30 CONTINUE
@@ -72,7 +79,13 @@ C
       DELTA= TMAX*SCALE*TOL
       EPS  = DELTA*DELTA
       K    = M
+C HALO: the QR sweep had no bound on its passes. A converging problem
+C HALO:   needs a few per eigenvalue; anything past 200 per eigenvalue
+C HALO:   is not converging and would run until killed
+      NSWP = 0
    70 L    = K
+      NSWP = NSWP + 1
+      IF (NSWP .GT. 200*M + 1000) GO TO 690
       IF (L .LE. 0) GO TO 140
       L1 = L - 1
       DO 80 I = 1,L
@@ -116,6 +129,20 @@ C
       IF (K .LT. L) GO TO 120
       E(K) = GG + SHIFT
       GO TO 70
+C HALO: not converging, or fed a NaN: say so and stop the run. Both
+C HALO:   come from the tridiagonal reduction having lost the mass norm
+C HALO:   of a trial vector (FERXTD, message 2394) on a model whose
+C HALO:   mass matrix is only semi-definite. -37 ends the run as a
+C HALO:   fatal, the way FEER itself does for a singular matrix.
+  690 CALL PAGE2 (5)
+      WRITE  (IO,695) UFM,NSWP
+  695 FORMAT (A23,' 2395', /5X,'FEER QR ITERATION ON THE REDUCED ',
+     1       'TRIDIAGONAL MATRIX DID NOT CONVERGE', /5X,'(A NAN IN ',
+     2       'THE MATRIX, OR',I8,' SWEEPS WITHOUT CONVERGENCE).', /5X,
+     3       'THE REDUCTION LOST THE MASS NORM OF A TRIAL VECTOR; ',
+     4       'SEE MESSAGE 2394 AND USE DIAG 16.')
+      CALL MESAGE (-37,0,NAMEQ)
+      RETURN
   140 DO 150 I = 1,M
   150 E(I) = E(I)/SCALE
       DO 155 L = 1,M1

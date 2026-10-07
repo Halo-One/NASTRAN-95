@@ -1,0 +1,129 @@
+$ Simcenter Nastran 2606.5000 (Linux, 2026-10-01): the print of
+$ utilities/open_source_software/NASTRAN/test/decks/aeroelastic_guide_examples/ha144b_trim_diverg_wkk2.dat
+$ (MSC's HA144B, antisymmetric, WKK = 2 I; the roll trim in subcase 1, the
+$ divergence of listing 3-1 in subcase 2), cut to the derivative table and
+$ the trim variables of subcase 1 and the complex eigenvalue and divergence
+$ summaries of subcase 2. ROLL 8.541367E-02 is the plain deck's at q = 8.015
+$ (WKK weights the trim's aerodynamics); the divergence roots are the plain
+$ deck's to every digit (23.73470 ...): Simcenter's DIVERG does not weight
+$ with WKK (scnas/nast/del/aestat.dat hands DIVERGRS the unweighted QKKS).
+$ test_nastran95ase_trim_corrections.m holds nastran95ase to both.
+1    EXAMPLE HA144B: BAH JET TRANSPORT WING DYNAMIC ANALYSIS                OCTOBER   1, 2026  SIMCENTER NASTRAN  7/27/26   PAGE    12
+      DIVERGENCE ANALYSIS                                                                                                           
+0     AILERON ROLL, STATIC AERO SOLUTION                                                                     SUBCASE 1              
+
+    N O N - D I M E N S I O N A L   S T A B I L I T Y   A N D   C O N T R O L   D E R I V A T I V E   C O E F F I C I E N T S
+
+                         CONFIGURATION = AEROSG2D     XY-SYMMETRY = ASYMMETRIC     XZ-SYMMETRY = ANTISYMMETRIC
+                                         MACH = 0.0000E+00                    Q = 4.0075E+00
+                         CHORD = 1.6250E+02           SPAN = 1.0000E+03            AREA = 8.1250E+04
+
+
+                TRANSFORMATION FROM BASIC TO REFERENCE COORDINATES:
+
+              { X }        [ -1.0000   0.0000   0.0000  ]  { X }         { 0.0000E+00 }
+              { Y }    =   [  0.0000   1.0000   0.0000  ]  { Y }      +  { 0.0000E+00 }
+              { Z }REF     [  0.0000   0.0000  -1.0000  ]  { Z }BAS      { 0.0000E+00 }
+
+
+
+
+    CONTROLLER STATE: INTERCEPT ONLY, ALL CONTROLLERS ARE ZERO
+
+    TRIM VARIABLE   COEFFICIENT              RIGID                         ELASTIC                          INERTIAL
+                                   UNSPLINED        SPLINED       RESTRAINED      UNRESTRAINED     RESTRAINED      UNRESTRAINED
+
+    REF. COEFF.      CX         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CY         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CZ         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CMX        1.241069E-16    1.241069E-16     7.795155E-17    2.146330E-16     2.371972E-15    2.146330E-16
+                     CMY        0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CMZ        0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+
+    ROLL             CX         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CY         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CZ         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CMX       -8.829062E-01   -8.829062E-01    -1.274478E+00   -1.198542E+00     7.364433E-16   -1.198542E+00
+                     CMY        0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CMZ        0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+
+    URDD4            CX         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CY         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CZ         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CMX       -2.346559E-17   -2.346559E-17    -2.627278E-01   -3.255634E-17     4.146820E+00   -3.255634E-17
+                     CMY        0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CMZ        0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+
+    AILE             CX         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CY         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CZ         0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CMX        2.897416E-01    2.897416E-01     1.088578E-01    1.023719E-01    -4.657847E-16    1.023719E-01
+                     CMY        0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+                     CMZ        0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00     0.000000E+00    0.000000E+00
+1    EXAMPLE HA144B: BAH JET TRANSPORT WING DYNAMIC ANALYSIS                OCTOBER   1, 2026  SIMCENTER NASTRAN  7/27/26   PAGE    17
+      DIVERGENCE ANALYSIS                                                                                                           
+0     AILERON ROLL, STATIC AERO SOLUTION                                                                     SUBCASE 1              
+
+                               A E R O S T A T I C   D A T A   R E C O V E R Y   O U T P U T   T A B L E S
+                         CONFIGURATION = AEROSG2D     XY-SYMMETRY = ASYMMETRIC     XZ-SYMMETRY = ANTISYMMETRIC
+                                           MACH = 0.000000E+00                Q = 4.007500E+00
+                         CHORD = 1.6250E+02           SPAN = 1.0000E+03            AREA = 8.1250E+04
+
+          TRIM ALGORITHM USED: LINEAR TRIM SOLUTION WITHOUT REDUNDANT CONTROL SURFACES.                                           
+
+
+                                                      AEROELASTIC TRIM VARIABLES
+
+                                  ID     LABEL                 TYPE        TRIM STATUS      VALUE OF UX
+
+                                         INTERCEPT          RIGID BODY           FIXED      1.000000E+00
+                                 501     ROLL               RIGID BODY            FREE      8.541367E-02  NONDIMEN. RATE  
+                                 502     URDD4              RIGID BODY           FIXED      0.000000E+00  LOAD FACTOR     
+                                 503     AILE          CONTROL SURFACE           FIXED      1.000000E+00  RADIANS         
+
+
+                                           CONTROL SURFACE POSITION AND HINGE MOMENT RESULTS
+
+                            ACTIVE LIMITS ARE FLAGGED WITH AN (A),  VIOLATED LIMITS ARE FLAGGED WITH A (V).
+
+                                                POSITION                                         HINGE MOMENT
+          CONTROL SURFACE      LOWER LIMIT       VALUE         UPPER LIMIT        LOWER LIMIT       VALUE         UPPER LIMIT
+              AILE           -1.570796E+00    1.000000E+00    1.570796E+00            N/A       -5.037367E+05         N/A      
+1    EXAMPLE HA144B: BAH JET TRANSPORT WING DYNAMIC ANALYSIS                OCTOBER   1, 2026  SIMCENTER NASTRAN  7/27/26   PAGE    26
+      DIVERGENCE ANALYSIS                                                                                                           
+0     AILERON ROLL, STATIC AERO SOLUTION                                                                     SUBCASE 2              
+ 
+                                        C O M P L E X   E I G E N V A L U E   S U M M A R Y
+0                ROOT     EXTRACTION                  EIGENVALUE                     FREQUENCY              DAMPING
+                  NO.        ORDER             (REAL)           (IMAG)                (CYCLES)            COEFFICIENT
+                      1           9          0.0             -4.871827E+00          7.753753E-01          0.0
+                      2          10          0.0              4.871827E+00          7.753753E-01          0.0
+                      3          11         -8.490942E+00     0.0                   0.0                   0.0
+                      4          12          8.490942E+00     0.0                   0.0                   0.0
+                      5           7          0.0             -1.057504E+01          1.683070E+00          0.0
+                      6           8          0.0              1.057504E+01          1.683070E+00          0.0
+                      7           5          0.0             -1.917222E+01          3.051353E+00          0.0
+                      8           6          0.0              1.917222E+01          3.051353E+00          0.0
+                      9           3          0.0             -2.956365E+01          4.705201E+00          0.0
+                     10           4          0.0              2.956365E+01          4.705201E+00          0.0
+                     11           1          0.0             -5.503535E+01          8.759148E+00          0.0
+                     12           2          0.0              5.503535E+01          8.759148E+00          0.0
+1    EXAMPLE HA144B: BAH JET TRANSPORT WING DYNAMIC ANALYSIS                OCTOBER   1, 2026  SIMCENTER NASTRAN  7/27/26   PAGE    28
+      DIVERGENCE ANALYSIS                                                                                                           
+0     AILERON ROLL, STATIC AERO SOLUTION                                                                     SUBCASE 2              
+
+
+
+        D I V E R G E N C E      S U M M A R Y
+
+  MACH NUMBER  =  0.000000     METHOD = COMPLEX LANCZOS
+
+
+  ROOT        DIVERGENCE               EIGENVALUE
+   NO.     DYNAMIC PRESSURE        REAL        IMAGINARY
+
+     2       2.373470E+01      0.000000E+00   4.871827E+00
+     6       1.118315E+02      0.000000E+00   1.057504E+01
+     8       3.675739E+02      0.000000E+00   1.917222E+01
+    10       8.740095E+02      0.000000E+00   2.956365E+01
+    12       3.028890E+03      0.000000E+00   5.503535E+01

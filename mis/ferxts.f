@@ -96,7 +96,12 @@ C
       GO TO 40
    20 DO 30 I = 1,NORD
    30 DSQ = DSQ + DBLE(V2(I)*V2(I))
-   40 DSQ = 1.0D+0/DSQRT(DSQ)
+C HALO: a start vector with no mass norm cannot be normalized; see the
+C HALO:   same guard in FERXTD (label 40) for why
+   40 IF (DSQ .GT. ZERO .AND. DSQ .EQ. DSQ) GO TO 45
+      CALL FERNPD (IFN, DSQ)
+      GO TO 500
+   45 DSQ = 1.0D+0/DSQRT(DSQ)
       TMP = SNGL(DSQ)
       DO 50 I = 1,NORD
    50 V2(I) = V2(I)*TMP
@@ -204,6 +209,8 @@ C
       DTMP = DSQ
       DSQ  = DSQ + D
       IF (DSQ .LT. DEPX2) GO TO 500
+C HALO: a NaN passes every comparison above; treat it as null
+      IF (DSQ .NE. DSQ) GO TO 500
       DTMP = DABS(D/DTMP)
       IF (DTMP.GT.OMDEPX .AND. DTMP.LT.OPDEPX) GO TO 500
       D = ZERO
@@ -233,7 +240,11 @@ C
   220 CALL FERFBS(V2(1),V4(1),V3(1),V5(1))
       DO 230 I = 1,NORD
   230 DSQ = DSQ + DBLE(V3(I)*V3(I))
-  240 DSQ = 1.0D+0/DSQRT(DSQ)
+C HALO: same guard as at label 40
+  240 IF (DSQ .GT. ZERO .AND. DSQ .EQ. DSQ) GO TO 245
+      CALL FERNPD (IFN, DSQ)
+      GO TO 500
+  245 DSQ = 1.0D+0/DSQRT(DSQ)
       TMP = SNGL(DSQ)
       DO 250 I = 1,NORD
   250 V2(I) = V3(I)*TMP
@@ -249,6 +260,8 @@ C     COMMENTS FROM G.CHAN/UNISYS   1/92
 C     WHAT HAPPENS IF D IS NEGATIVE HERE? NEXT LINE WILL BE ALWAYS TRUE.
 C
       IF (D .LT. DEPX*DABS(AII)) GO TO 500
+C HALO: and a NaN, which the line above lets through
+      IF (D .NE. D) GO TO 500
   320 CALL GOPEN (IFG,ZB(1),WRT)
       IIP = 1
       NNP = NORD
@@ -284,8 +297,16 @@ C
       GO TO 480
   460 DO 470 I = 1,NORD
   470 DB = DB + DBLE(V3(I)*V3(I))
-  480 DB = DSQRT(DB)
-      ERRC = SNGL(DB)
+C HALO: a mass norm that is not positive (semi-definite mass matrix,
+C HALO:   roundoff) would become NaN under DSQRT and poison every
+C HALO:   later row; treat the vector as null so the reduction reseeds.
+C HALO:   See FERXTD label 480 for the full story.
+  480 IF (DB .GT. ZERO .AND. DB .EQ. DB) GO TO 485
+      CALL FERNPD (IFN+1, DB)
+      DB = ZERO
+      GO TO 486
+  485 DB = DSQRT(DB)
+  486 ERRC = SNGL(DB)
       B(1) = SNGL(AII)
       B(2) = SNGL(D)
       CALL WRITE (SR5FLE,B(1),2,1)
@@ -310,7 +331,15 @@ C
 C
 C NEED TO SAVE ORTHOGONAL VECTORS BACK TO FILE
 C
-      CALL GOPEN ( IFV, ZB(1), WRT ) 
+C HALO: rewritten from the start with the trailer reset, and also on
+C HALO:   the reseed path below (IRET = 1), which re-enters this routine
+C HALO:   and reads the vectors back from the file: NASA's in-core mode
+C HALO:   never wrote them there. See FERXTD, same labels.
+      IRET = 0
+5100  IF (NIDORV .EQ. 0) GO TO 5200
+      MCBVEC(2) = 0
+      MCBVEC(6) = 0
+      CALL GOPEN ( IFV, ZB(1), WRTREW ) 
       IIP = 1
       NNP = NORD
       NIDX = NIDORV   
@@ -319,12 +348,18 @@ C
       CALL PACK ( ZD( ILOC ), IFV, MCBVEC(1) )
 5000  CONTINUE
       CALL CLOSE ( IFV, NOREW )
+5200  IF (IRET .EQ. 1) GO TO 630
 6000  CONTINUE
       IF (IFN .GE. MORD) GO TO 630
 C
 C     IF NULL VECTOR GENERATED, RETURN TO OBTAIN A NEW SEED VECTOR
 C
-      IF (DB .LT. DEPX*DABS(AII)) GO TO 630
+C HALO: with the in-memory vectors saved to the file first
+      IF (DB .GE. DEPX*DABS(AII)) GO TO 6300
+      IF (NIDORV .EQ. 0) GO TO 630
+      IRET = 1
+      GO TO 5100
+6300  CONTINUE
 C
 C     A GOOD VECTOR IN V2. MOVE IT INTO 'PREVIOUS' VECTOR SPACE V1,
 C     NORMALIZE V3 AND V2. LOOP BACK FOR MORE VECTORS.

@@ -104,16 +104,31 @@ switch lower(char(what))
     case 'readers'
         % the readers are VehicleDesign's, not this repository's: the
         % checkout VEHICLEDESIGN_ROOT names, else one beside this fork
-        % (../VehicleDesign); '' when neither has utilities/jhc_library
+        % (../VehicleDesign); '' when neither has utilities/jhc_library.
+        % VehicleDesign's own set_up_path puts the rest of what the readers
+        % and the animator call on the path, as its tests run; this folder
+        % goes back in front of it afterwards, because that path holds
+        % VehicleDesign's own copy of these tests
+        here = fileparts(mfilename('fullpath'));
         root = getenv('VEHICLEDESIGN_ROOT');
         if isempty(root)
-            fork = fileparts(fileparts(fileparts(mfilename('fullpath'))));
-            root = fullfile(fileparts(fork), 'VehicleDesign');
+            % here = <fork>/standalone/test: the checkout beside <fork>
+            root = fullfile(fileparts(fileparts(fileparts(here))), 'VehicleDesign');
         end
         out = fullfile(root, 'utilities', 'jhc_library');
         if ~isfolder(out)
             out = '';
+            return
         end
+        if isfile(fullfile(root, 'set_up_path.m'))
+            addpath(root);
+            try
+                set_up_path();
+            catch
+            end
+        end
+        addpath(out);
+        addpath(here);
 
     case 'running'
         % a process of this name (Simcenter's analysis.exe on windows,

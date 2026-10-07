@@ -68,7 +68,11 @@ end
 
 function teardownOnce(test_case)
     close all;
-    rmdir(test_case.TestData.out, 's');
+    % nothing to remove when setupOnce stopped on an assumption (no readers,
+    % no executable): the tests are then incomplete, not failed
+    if isfield(test_case.TestData, 'out') && isfolder(test_case.TestData.out)
+        rmdir(test_case.TestData.out, 's');
+    end
 end
 
 %% the joined print's layout

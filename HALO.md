@@ -150,6 +150,7 @@ before the solver sees it and the print file after the solver is done.
 | `msc/mscxlat.c`, `msc/mscexec.c` | The translation. `SOL 101/103/105/107-112/145/146` to rigid formats 1/3/5/7-12 and AERO 10/11; case control with prefix-matched names and MSC-only commands dropped with what they cost named; `RBAR`/`RBE2` to `CRIGD1` (independent end chosen so that a grid on a SUPORT or SPC is never made dependent), `CBUSH`+`PBUSH` to `CELAS2` (coincident) or `CONROD` (separated, axial only), `EIGRL` to `EIGR FEER` with a shift, `PBARL` to `PBAR`, `CQUAD4`/`CTRIA3`/`PSHELL` to `CQUAD2`/`CTRIA2`/`PQUAD2` (panels thinner than 1e-6 dropped as the massless drawing aids they are), `SUPORT1` to `SUPORT`, ids above 2^24-1 (any MSC takes, up to 99,999,999) renumbered everywhere they are referenced, onto a block that ends at 2^24-1 and keeps their order, SPC1 `THRU` expanded, and every degree of freedom nothing is attached to constrained, which is what MSC's AUTOSPC does. A card it does not know is a fatal that names it. |
 | `msc/mscwrite.c` | Eight-column output. `msc_r8` tries every eight-column spelling and keeps the one that reads back closest; a number wider than eight columns is re-spelled, never cut (`-6.89e+04` cut to eight reads as -6.89: this happened, on a PBAR, and cost an eigensolve ten minutes of finding nothing); large-field cards when even that loses more than 1e-5. |
 | `msc/mscf06.c` | The print file rewritten into MSC's layout on the way out, so that a reader written against MSC output reads it: the eigenvector banner carries `CYCLES =` and the mode number where MSC puts them, exact zeros are `0.000000E+00`, the eigenvalue table has MSC's sub-banner and no blank between header and rows, the weight generator's rows sit at MSC's columns, the sorted-echo banner is spelled as MSC spells it, renumbered ids are restored, modes past the number requested are cut (FEER returns a reduced problem's worth), and no line is zero-length. |
+| `msc/mscdyn.c` | SOL 145 / 146: the force weights WKK / WTFACT (DMI, DMIK) and the extra points' downwash D1JE / D2JE (DMI, DMIJ) taken out of the deck and written back as DMIs in the solver's set order, for the aero alter (below, "SOL 145 / 146: the force weights WKK ..."). |
 | `msc/mscop4.c` | `ASSIGN OUTPUT4` and the `OUTPUT4 PHG//-1/101/2` alter of the SEMODES decks become `ALTER 77` in rigid format 3 (after SDR1, where PHIG and MGG both exist; the number is from a DIAG 14 listing), FTN11.. units, and a rewrite of NASTRAN-95's formatted file into MSC's 4I8 / A8 / `1P,5E16.9` layout that `OUTPUT4_rd.m` and ZAERO read. Three traps live in that rewrite, all of them from `mis/outpt4.f` rather than from any document: the records are fixed-width Fortran output (`1X,3I13` then `1X,10E13.6` single precision, `1X,3I16` then `1X,8D16.9` double) and must be sliced at the field width, because a negative number fills its field to the edge and two adjacent negatives touch; `JJ` in a column header counts single-precision *words*, so a double-precision column announces twice the values it holds; and a column with no terms comes back with `II` zero and the previous column's words still in the unpack buffer, so it has to be read past and left out, which is also what MSC's own OUTPUT4 does with it. `N95_KEEP_OP4` in the environment keeps the raw file next to the converted one. |
 | `mis/apd.f` | The (Mach, k) list of the MKAERO1 / MKAERO2 cards is collected, sorted by Mach then k (`APDMKS`, a stable insertion sort at the end of the file) and written to the AERO data block once, and the list is printed as UIM 9457. NASA wrote the pairs card by card in sorted bulk data order, and MKAERO1 cards of one Mach set tie on every sorted field, so a k list split over several cards came out with the cards shuffled - a two-card deck put k = 1.6, 3.2 ahead of 0.01 .. 0.8 (Simcenter does the same, and does not sort). The flutter and gust interpolations never cared; the QHHL / QHJL / QKHL columns AMP writes, and the OUTPUT4 export of them, follow this list, and a reader has to know the order. PK roots unchanged to round-off. |
 | `msc/mscopt.c`, `msc/mscopt2.c`, `msc/mscopt.h` | `SOL 200`. The design model (`DESVAR`, `DVPREL1`, `DVMREL1`, `DLINK`, `DRESP1` WEIGHT/VOLUME/FREQ/EIGN/DISP/STRESS, `DCONSTR`, `DCONADD`, `DSCREEN`, `DOPTPRM`, `DESOBJ`/`DESSUB`/`DESGLB`/`ANALYSIS`), MSC's constraint normalisation, forward-difference sensitivities from child runs of this executable (`--cosmic`), convex linearisation (CONLIN) solved through its dual, move limits, hard convergence. Weight and volume are closed-form from the model. On MSC's own three-bar truss example it follows MSC's design-cycle history to within half a percent at every cycle. |
@@ -1688,3 +1689,107 @@ balance; a typical section's divergence is K / (S c CMY_alpha) to 7 digits.
 Unchanged: the monarch trim deck's tables, trims and displacements (only fixed trim
 variables now print their exact TRIM value instead of the solve's 1e-20 roundoff, and
 OLOAD rotations of 1e-26 print 0.0), and the small trim test deck likewise.
+
+## SOL 145 / 146: the force weights WKK and the extra points' downwash D1JE / D2JE
+
+Branch `halo-ase-wkk` (from `halo-ase-sol144-plant` 821d508). Until now the fork applied
+WKK (and W2GJ, FA2J) in SOL 144 alone (AETRIM); the flutter and gust solutions ran on
+the theory's unweighted box forces, while MSC and Simcenter weight them there too.
+
+**What MSC and Simcenter do.** Their PFAERO subDMAP forms WSKJF = WTFACT SKJ, WTFACT the
+deck's WTFACT or, when it has none, its WKK (Simcenter 2606 `pfaero.dat:59-97` and
+`465-469`; the Aeroelastic guide's PFAERO step 26), and AMP builds QHH, QKH and QHJ on it.
+User downwash for extra points, the DMIs D1JE and D2JE (w_j = (D1JE + i k D2JE) u_e; the
+guide's eqs. 1-116 to 1-119, PFAERO step 32), gives QHH a column per extra point through
+the same weighted forces. Simcenter's SOL 145 finds WKK only as a k-set DMI: a DMIK WKK
+is silently left out there (VehicleDesign skill `simcenter-nastran`).
+
+**What NASTRAN-95 had.** AMP takes D1JE and D2JE (`mis/ampb.f` merges them behind the
+modes' downwash, the e rows of QHH null), but AERO 10 and 11 read them off a user tape
+(INPUTT2, statement 87, when PARAM NODJE is set); nothing weights SKJ.
+
+**What the front end does now** (`msc/mscdyn.c`, new; `mscxlat.c`, `mscop4.c`, `msc.h`):
+- In a SOL 145 / 146 deck it takes DMI or DMIK named WKK or WTFACT and DMI or DMIJ named
+  D1JE or D2JE out of the bulk data (WTFACT wins over WKK, a DMI over a DMIK / DMIJ of
+  the same name, as in MSC). DMIJ W2GJ / FA2J are left out with UIM 9235 (static
+  corrections), any other DMIK / DMIJ / DMIJI with UWM 9234.
+- It writes them back as DMIs in NASTRAN-95's set order: WKK square on the k set (two
+  rows a box, T3 then R5), D1JE / D2JE j rows by a column per extra point (ascending
+  EPOINT id), real, TIN 1. A DMIK / DMIJ maps by box id; a DMI's rows are MSC's set
+  positions, the boxes in ascending id. A matrix not given beside its twin is written
+  null (one zero term: IFP refuses a DMI without a column, UFM 325).
+- The order. NASTRAN-95's APD makes the boxes panel by panel, the CAERO1 cards in the
+  order of a sort on IGID (`mis/apd12.f`), each panel chordwise within spanwise strips
+  with ids EID + strip NCHORD + chord (`mis/apd1.f`); MSC numbers its set rows by box id.
+  The two agree when IGID never falls as EID rises (Simcenter's QRG asks it of every
+  deck, CAERO1 remark 8) and no two panels' box ids overlap; otherwise UFM 9232. Only
+  CAERO1 panels (UFM 9232 for other CAEROn).
+- On a restart the model is the modes run's bulk data off the tape plus the restart
+  deck's cards, so the boxes and extra points are counted over both decks. (The first
+  version counted the restart deck's alone: a modes run with panels the flutter deck
+  did not repeat gave a WKK of the wrong size and UFM 3055 in MPYAD.)
+- The alter (`msc_op4_alter`, its switches in `msc_aero_alter`):
+  - WKK: `ALTER 85` (after AMG in AERO10 and AERO11): `MPYAD WKK,SKJ,/SKJW/0/1/0/PREC`,
+    `EQUIV SKJW,SKJ/ALWAYS`. AMP (90) is the only reader of SKJ, so QHHL, QKHL and QHJL
+    carry the weights, as MSC's WSKJF does.
+  - D1JE / D2JE: `ALTER 86,88` removes COND NODJE, the INPUTT2 and LABEL NODJE, so AMP
+    reads the DMIs. (The COND jumps over the INPUTT2 unless NODJE is set, and so over
+    anything put in its place: hence 86-88, not 87 alone.)
+  - SOL 146 with a DMI CSMG and EPOINTs and no D1JE / D2JE of its own (UIM 9238): the
+    surfaces become the extra points, CSMG column i on the i-th extra point, their
+    downwash made in the alter: `VEC USET/VGAE/*G*/*A*/*COMP*`, `PARTN CSMG,,VGAE/CSMAE`,
+    `MPYAD GTKA,CSMAE,/GKC/1/1/0/PREC`, `MPYAD D1JK,GKC,/D1JE/1/1/0/PREC` and the same
+    for D2JE. NASTRAN-95 stores D1JK, D2JK k x j and GTKA a x k (DIAG 8), so both
+    products are transposed, as AMPB's SSG2B calls are. A TF on each extra point holds it
+    to its load. SOL 145 with CSMG and EPOINTs is UFM 9237 (the CSMG modes join the basis
+    on the a set).
+  - Without these cards nothing is written and the translation is what it was.
+- OUTPUT4 names added: WKK, SKJ (the weighted one after the alter), D1JE, D2JE, D1JK,
+  D2JK, GTKA.
+
+**Checked on Windows** (winlibs 16.2, the pinned OpenBLAS; a build of 821d508 and one of
+this tree, both in scratch; buster4's decks with the includes of 2026-10-08, the same
+files Simcenter's corrected export ran):
+- *No cards, bit for bit.* The build of 821d508 prints what the committed 821d508 exe
+  prints (two decks, 0 lines). Against it this tree gives, with no WKK / D1JE / D2JE:
+  the same translated decks (13 of VehicleDesign's NASTRAN test decks, SOL 103 / 144 /
+  145 including the two-subcase restart, and buster4's), the same prints (`compare_prints`,
+  0 differing lines: the test decks, buster4's modes runs with and without the boom
+  panels, the control deck restarted, the per-box QHJ export, the 1-cos and PSD gust
+  decks) and byte-identical OUTPUT4 files; NASA's ten aero demos (d10*, d11*) through
+  `nastran` print the same.
+- *WKK against Simcenter 2606* (`mfp_buster4_m005` / `_m010` of VehicleDesign's
+  `ase/flutter/nastran_mfp_buster4_corrected/`: WKK as a k-set DMI, the boom panels, the
+  stabs' rotations appended, 27 and 17 k): the fork's control deck with `trim_wkk.bdf`,
+  `boom_panels.bdf`, `boom_panels_wkk.bdf` (the DMIK form), restarted off its modes run,
+  Simcenter's modes mapped onto the fork's by least squares on the printed shapes (fit
+  3.2e-7). QHH, the elastic block (modes 7-36), relative Frobenius difference: 1.7e-4 at
+  k <= 0.3, 5.7e-4 at k = 1, 1.1e-3 at k = 2.8; diagonal median 6e-5 to 2e-4; QHC 5.6e-4
+  to 1.9e-3 - the level of the two solvers' flat models (QHH 1.7e-4, 5e-4 at k = 1).
+  The same with and without WKK: 6.3 to 7.1 % (QHC 0.7 %), Simcenter's change the same to
+  the third digit. Mach 0.10 the same to two digits.
+- *The per-box gust matrix* QJH (OUTPUT4 QHJ, GUSTAERO, five of the k): 1.0e-3 (k <= 0.1)
+  to 2.9e-3 (k = 2) from Simcenter's, row for row, so the j order is MSC's; WKK moves it
+  6.7-6.9 %. The zero-alpha lift (W2GJ through Re QJH at k = 0.005, on a fitted unit
+  heave): 5.4447 without WKK, 5.0360 with, Simcenter 5.0360 (-7.5 %).
+- *The spellings*: WKK as a DMI on the k set (VehicleDesign's `wkk_dmi.bdf`) and as the
+  DMIK give the same QHHL to the bit; WKK = I (DMI FORM 3, THRU) gives the unweighted
+  QHHL to the bit.
+- *SOL 146*: the 1-cos gust deck with WKK = 2 I prints the same response as the plain
+  deck at PARAM Q doubled, every one of 2,503 tables to the last digit, so the weights
+  reach both the motion and the gust forces. With buster4's WKK the response peaks fall
+  1.4-5 % (median 2.3 %).
+- *D1JE / D2JE*: the stabs as four extra points in the 1-cos deck (EPOINT, TF B0 = 1).
+  The downwash made from CSMG is D1JE = 1 on each stab box (the unit rotation, to 4e-7)
+  and D2JE the box's arm about the hinge over b. Its QHHL columns equal the SOL 145
+  control deck's surface columns QHC to the bit at the 26 k the two lists share (modes
+  block to 3e-13), with and without WKK; the e rows are null. The same matrices written
+  back as the user's DMI (TIN 2) give those columns to 1.4e-7 (the DMI is written single
+  precision), and as DMIJ by box id the DMI's to the bit. A commanded stab-1 deflection
+  (DAREA on its extra point) through the user's matrices prints the CSMG-made run's
+  response to 3.4e-6 of each table's peak. D1JE alone runs (a null D2JE is written; the
+  columns then move 40 %: the D2JE term is no small part).
+
+One print of the 1-cos deck lost 146 rows of one point's table in one run, with the
+same deck and OUTPUT4 files; a rerun printed the reference to the bit. The machine was
+out of commit memory at the time (fork failures beside it).

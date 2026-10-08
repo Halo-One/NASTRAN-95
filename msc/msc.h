@@ -203,11 +203,30 @@ void msc_f06_modes(int n);
 void msc_f06_remap(int new_id, int old_id);
 int  msc_f06_get_modes(void);
 
-/* OUTPUT4 matrices (mscop4.c) */
+/* OUTPUT4 matrices, and the aero rigid formats' alter (mscop4.c) */
 int  msc_op4_scan(msc_deck *d);
 int  msc_op4_count(void);
-void msc_op4_alter(FILE *fp, int rf, int csmodes);
+/* what the alter does to AERO 10 / 11 beside the OUTPUT4 requests     */
+typedef struct {
+    int csmodes;   /* SOL 145, DMI CSMG: the surfaces' rotations joined to
+                    * the modal basis after GKAM (statement 70)            */
+    int wkk;       /* SOL 145 / 146, DMI WKK on the k set (mscdyn.c): SKJ
+                    * weighted after AMG (statement 85)                    */
+    int dje;       /* SOL 145 / 146 with EPOINTs, DMI D1JE / D2JE
+                    * (mscdyn.c): the user-tape INPUTT2 (86-88) removed   */
+    int csep;      /* SOL 146, DMI CSMG and EPOINTs, no D1JE / D2JE given:
+                    * D1JE / D2JE made from the surfaces' rotations (86-88) */
+} msc_aero_alter;
+void msc_op4_alter(FILE *fp, int rf, const msc_aero_alter *a);
 int  msc_op4_finish(void);
 void msc_op4_collect(const char (*child_dir)[32], const int *id, int n);
+
+/* the aerodynamic corrections of SOL 145 / 146 (mscdyn.c): DMI / DMIK
+ * WKK and WTFACT, DMI / DMIJ D1JE and D2JE taken out of the bulk data and
+ * written back as DMIs in the solver's set order                       */
+void msc_dyn_reset(int rf);
+int  msc_dyn_card(const msc_card *c);
+int  msc_dyn_emit(const msc_deck *d, const msc_deck *also, msc_list *out, int *wkk,
+                  int *dje, int *ne);   /* also: a restart's modes deck */
 
 #endif /* MSC_H */

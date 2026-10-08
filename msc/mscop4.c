@@ -79,6 +79,12 @@ static const struct { const char *msc, *cosmic; } dbmap[] = {
     { "PHDH", "PHIDH" }, { "PHIDH", "PHIDH" },
     /* the control-surface modes as the alter partitions them (a-set) */
     { "CSMA", "CSMA" },
+    /* the corrections of the dynamic solutions (mscdyn.c): the k-set
+     * weights, SKJ after them (the alter puts WKK SKJ in SKJ's place),
+     * the extra points' downwash, and what the surfaces' is made from */
+    { "WKK",  "WKK"  }, { "SKJ",  "SKJ"  },
+    { "D1JE", "D1JE" }, { "D2JE", "D2JE" },
+    { "D1JK", "D1JK" }, { "D2JK", "D2JK" }, { "GTKA", "GTKA" },
     { NULL, NULL }
 };
 
@@ -177,7 +183,8 @@ int msc_op4_scan(msc_deck *d)
                             "OUTPUT4 of %s: this front end does not know what\n"
                             "NASTRAN-95 calls that data block. It knows PHG (the\n"
                             "g-set mode shapes), MGG, KGG, PHA, MAA, KAA and, in the\n"
-                            "aero rigid formats, QHHL, QHJL, QKHL, MHH, KHH, BHH, PHDH.\n"
+                            "aero rigid formats, QHHL, QHJL, QKHL, MHH, KHH, BHH, PHDH,\n"
+                            "CSMA, WKK, SKJ, D1JE, D2JE, D1JK, D2JK and GTKA.\n"
                             "FIX   Ask for one of those, or add the name to mscop4.c.",
                             db);
                 }
@@ -217,13 +224,46 @@ int msc_op4_scan(msc_deck *d)
 
 int msc_op4_count(void) { return nreq; }
 
-/* the alter, into the executive control */
-void msc_op4_alter(FILE *fp, int rf, int csmodes)
+/* the alter, into the executive control.
+ *
+ * a->csmodes  SOL 145 with a DMI CSMG: the control-surface modes joined to
+ *             the modal basis after GKAM (statement 70);
+ * a->wkk      SOL 145 / 146 with WKK or WTFACT (DMI or DMIK, written back by
+ *             mscdyn.c as a DMI WKK on the solver's k set): SKJ weighted
+ *             after AMG (statement 85 of AERO10 and of AERO11), so AMP's
+ *             QHHL, QKHL and QHJL are built on WKK SKJ - MSC's PFAERO,
+ *             WSKJF = WTFACT SKJ (the Aeroelastic guide: W_kk multiplies
+ *             every box force and moment of the theory);
+ * a->dje      SOL 145 / 146 with EPOINTs and D1JE / D2JE (DMI or DMIJ,
+ *             written back by mscdyn.c as DMIs on the solver's j set):
+ *             statements 86-88 - COND NODJE, the INPUTT2 of D1JE, D2JE off
+ *             a user tape, LABEL NODJE - removed, so AMP reads the DMIs and
+ *             merges them behind the modes' downwash (mis/ampb.f);
+ * a->csep     SOL 146 with a DMI CSMG and EPOINTs and no D1JE / D2JE given:
+ *             86-88 replaced by the downwash of the surfaces' rotations,
+ *             D1JE = D1JK G_ka CSMA and D2JE = D2JK G_ka CSMA (MSC's
+ *             notation; NASTRAN-95 stores D1JK, D2JK k x j and GTKA a x k,
+ *             so both products are transposed, as AMPB's are), one extra
+ *             point per CSMG column in id order - the classic NASTRAN
+ *             control input: a TF holds each extra point to its load, and
+ *             the surface moves the air with no structural inertia of its
+ *             own.
+ * The COND at 86 jumps over the INPUTT2 unless PARAM NODJE is set, and so
+ * over anything written in its place: hence 86-88, not 87 alone.
+ * Without these the text is what it always was.                         */
+void msc_op4_alter(FILE *fp, int rf, const msc_aero_alter *a)
 {
-    int k, any = 0;
+    int k, any = 0, always = 0;
+    int csmodes = 0, wkk = 0, dje = 0, csep = 0;
     for (k = 0; k < nreq; k++) if (reqs[k].cosmic[0]) any = 1;
-    if (!any && !csmodes) return;
-    if (rf == 10 && csmodes) {
+    if (a && (rf == 10 || rf == 11)) {
+        csmodes = a->csmodes && rf == 10;
+        wkk     = a->wkk;
+        dje     = a->dje;
+        csep    = a->csep && rf == 11 && !a->dje;
+    }
+    if (!any && !csmodes && !wkk && !dje && !csep) return;
+    if (csmodes) {
         /* the control-surface modes (DMI CSMG, g-set rows, a column per
          * surface) joined to the modal basis after GKAM (statement 70):
          * the g-set columns partitioned to the a-set with USET's G -> A
@@ -240,6 +280,7 @@ void msc_op4_alter(FILE *fp, int rf, int csmodes)
          * what the DMI and PHIDH are.                                   */
         fprintf(fp, "ALTER   70 $\n");
         fprintf(fp, "PARAM   //*NOP*/V,N,ALWAYS=-1 $\n");
+        always = 1;
         fprintf(fp, "VEC     USET/VGA/*G*/*A*/*COMP* $\n");
         fprintf(fp, "PARTN   CSMG,,VGA/CSMA,,,/1/1 $\n");
         fprintf(fp, "PARAML  PHIDH//*TRAILER*/C,N,1/V,N,NH $\n");
@@ -248,12 +289,34 @@ void msc_op4_alter(FILE *fp, int rf, int csmodes)
         fprintf(fp, "MATGEN  ,/CPV/C,N,6/V,N,NHC/V,N,NH/V,N,NC $\n");
         fprintf(fp, "MERGE   PHIDH,,CSMA,,CPV,/PHIDH1/1/1 $\n");
         fprintf(fp, "EQUIV   PHIDH1,PHIDH/ALWAYS $\n");
-        if (!any) {
+    }
+    if (wkk) {
+        /* after AMG (statement 85 of AERO10 and of AERO11): the weighted
+         * SKJ in SKJ's place for AMP (90), the only reader of SKJ       */
+        fprintf(fp, "ALTER   85 $\n");
+        if (!always) { fprintf(fp, "PARAM   //*NOP*/V,N,ALWAYS=-1 $\n"); always = 1; }
+        fprintf(fp, "MPYAD   WKK,SKJ,/SKJW/0/1/0/PREC $\n");
+        fprintf(fp, "EQUIV   SKJW,SKJ/ALWAYS $\n");
+    }
+    if (dje || csep) {
+        /* statements 86-88 of AERO10 and of AERO11 (COND NODJE, INPUTT2
+         * of D1JE and D2JE, LABEL NODJE): the DMIs, or the surfaces'    */
+        fprintf(fp, "ALTER   86,88 $\n");
+        if (csep) {
+            fprintf(fp, "VEC     USET/VGAE/*G*/*A*/*COMP* $\n");
+            fprintf(fp, "PARTN   CSMG,,VGAE/CSMAE,,,/1/1 $\n");
+            fprintf(fp, "MPYAD   GTKA,CSMAE,/GKC/1/1/0/PREC $\n");
+            fprintf(fp, "MPYAD   D1JK,GKC,/D1JE/1/1/0/PREC $\n");
+            fprintf(fp, "MPYAD   D2JK,GKC,/D2JE/1/1/0/PREC $\n");
+        }
+    }
+    if (!any) {
+        if (csmodes) {
             fprintf(fp, "ALTER   90 $\n");
             fprintf(fp, "EXIT $\n");
-            fprintf(fp, "ENDALTER $\n");
-            return;
         }
+        fprintf(fp, "ENDALTER $\n");
+        return;
     }
     if (rf == 3) {
         /* after SDR1, statement 77 of DISP3: PHIG and MGG both exist */
@@ -273,7 +336,7 @@ void msc_op4_alter(FILE *fp, int rf, int csmodes)
         if (reqs[k].cosmic[0])
             fprintf(fp, "OUTPUT4 %s,,,,//-1/%d/2 $\n", reqs[k].cosmic, reqs[k].n95unit);
     /* the widened basis stops here: FA1 would take QHHL for the modes' */
-    if (rf == 10 && csmodes) fprintf(fp, "EXIT $\n");
+    if (csmodes) fprintf(fp, "EXIT $\n");
     fprintf(fp, "ENDALTER $\n");
 }
 

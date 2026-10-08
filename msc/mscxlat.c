@@ -84,6 +84,7 @@ typedef struct {
     int        have_eig;
     int        pkmatch;   /* the deck carries PARAM PKMATCH itself           */
     int        pkmatch_written; /* PARAM PKMATCH 1 already emitted for a PKNL */
+    int        dyn;       /* SOL 145 / 146: WKK, WTFACT, D1JE, D2JE to mscdyn.c */
     int        fatal;
 } msc_ctx;
 
@@ -1166,6 +1167,11 @@ static void translate_bulk(msc_ctx *x)
          * (msctrim.c), not to the solver                               */
         if (aet_g.active && aet_bulk_card(c)) continue;
 
+        /* SOL 145 / 146: the force weights and the extra points' downwash
+         * (DMI, DMIK, DMIJ) go to mscdyn.c, which writes them back in
+         * the solver's order after this pass                           */
+        if (x->dyn && msc_dyn_card(c)) continue;
+
         if (msc_streq(n, "RBAR"))        { do_rigid_bar(x, c); continue; }
         if (msc_streq(n, "RBE2"))        { do_rbe2(x, c);      continue; }
         if (msc_streq(n, "CBUSH"))       { do_cbush(x, c);     continue; }
@@ -1670,6 +1676,7 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     int         rf = 0, rc, i;
     int         spc_sel = 0, method_sel = 0;
     int         ngrid;
+    int         dyn_wkk = 0, dyn_dje = 0, dyn_ne = 0;
 
     memset(&x, 0, sizeof(x));
     x.d = d;
@@ -1718,6 +1725,9 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
         aet_g.active = 1;
         aet_case_scan(d);
     }
+    /* SOL 145 / 146: the aerodynamic corrections (mscdyn.c)            */
+    msc_dyn_reset(rf);
+    x.dyn = (rf == 10 || rf == 11);
 
     {
         /* a restart's modes deck has its ids numbered with this one's */
@@ -1739,6 +1749,20 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     if (aet_g.active) {
         if (aet_check() || msc_nfatal()) return 1;
         aet_emit(&x.out);
+    }
+    if (x.dyn) {
+        /* a restart's model is the modes run's bulk data too: its panels
+         * and extra points are counted with this deck's               */
+        msc_deck rd;
+        int      have_rd = 0, bad;
+        if (g_restart_deck[0]) {
+            msc_msg_quiet(1);
+            have_rd = msc_read(g_restart_deck, &rd) == 0;
+            msc_msg_quiet(0);
+        }
+        bad = msc_dyn_emit(d, have_rd ? &rd : NULL, &x.out, &dyn_wkk, &dyn_dje, &dyn_ne);
+        if (have_rd) msc_free(&rd);
+        if (bad) return 1;
     }
     auto_spc(&x);
 
@@ -1795,18 +1819,70 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
         /* a DMI named CSMG in a SOL 145 deck: the control-surface modes
          * (g-set columns) to append to the modal basis for AMP, so that
          * QHHL comes out as [QHH QHC; QCH QCC] (write_control_modes_dmi
-         * in VehicleDesign); the alter is in msc_op4_alter             */
-        int csmodes = 0, ic;
+         * in VehicleDesign); in a SOL 146 deck with EPOINTs and no D1JE /
+         * D2JE of its own, the surfaces as extra points driven through
+         * their downwash (D1JE, D2JE made from CSMG). The force weights
+         * and the extra points' downwash of the deck (mscdyn.c) are the
+         * other two jobs of the alter, which is in msc_op4_alter        */
+        msc_aero_alter aa;
+        int csmg = 0, ncsmg = 0, ic;
         for (ic = 0; ic < d->nbulk; ic++) {
             const msc_card *c = &d->bulk[ic];
-            if (!c->dropped && msc_streq(c->name, "DMI") && c->nfld > 1 &&
-                msc_streq(msc_f(c, 1), "CSMG")) csmodes = 1;
+            if (c->dropped) continue;
+            if (msc_streq(c->name, "DMI") && c->nfld > 1 && msc_streq(msc_f(c, 1), "CSMG")) {
+                csmg = 1;
+                if (msc_fi(c, 2, -1) == 0) ncsmg = msc_fi(c, 8, 0);
+            }
         }
-        if (csmodes && rf != 10)
-            msc_msg(MSC_WARN, 9135, "DMI CSMG (control-surface modes) is only acted on "
-                    "in SOL 145 (rigid format 10); this deck's rigid format %d leaves it "
-                    "unused.", rf);
-        msc_op4_alter(fp, rf, csmodes && rf == 10);
+        memset(&aa, 0, sizeof(aa));
+        aa.csmodes = csmg && rf == 10;
+        aa.wkk     = dyn_wkk;
+        aa.dje     = dyn_dje;
+        aa.csep    = csmg && rf == 11 && dyn_ne > 0 && !dyn_dje;
+        if (csmg && rf != 10 && !aa.csep) {
+            if (rf == 11)
+                msc_msg(MSC_WARN, 9135, "DMI CSMG (control-surface modes) is only acted on "
+                        "in SOL 145 (rigid format 10), and in SOL 146 with EPOINTs and no D1JE / "
+                        "D2JE (the surfaces' downwash on the extra points); this SOL 146 deck %s, "
+                        "which leaves it unused.", dyn_dje ? "gives D1JE / D2JE of its own"
+                                                          : "has no EPOINT");
+            else
+                msc_msg(MSC_WARN, 9135, "DMI CSMG (control-surface modes) is only acted on "
+                        "in SOL 145 (rigid format 10), and in SOL 146 with EPOINTs; this deck's "
+                        "rigid format %d leaves it unused.", rf);
+        }
+        if (aa.csmodes && dyn_ne > 0) {
+            msc_msg(MSC_FATAL, 9237,
+                "SOL 145 with a DMI CSMG and EPOINTs: the control-surface modes\n"
+                "join the modal basis on the a set, and the extra points would\n"
+                "make it the d set's.\n"
+                "FIX   Give the surfaces as the CSMG modes or as extra points\n"
+                "      (EPOINT with D1JE / D2JE), not both.");
+            fclose(fp);
+            return 1;
+        }
+        if (aa.csep) {
+            if (ncsmg != dyn_ne) {
+                msc_msg(MSC_FATAL, 9237,
+                    "SOL 146 with a DMI CSMG and EPOINTs: the surfaces become the\n"
+                    "extra points, one per CSMG column in EPOINT id order, and the\n"
+                    "model has %d column%s and %d extra point%s.\n"
+                    "FIX   Give one EPOINT per surface, or D1JE / D2JE for the\n"
+                    "      extra points.",
+                    ncsmg, ncsmg == 1 ? "" : "s", dyn_ne, dyn_ne == 1 ? "" : "s");
+                fclose(fp);
+                return 1;
+            }
+            msc_msg(MSC_INFO, 9238,
+                "SOL 146 with a DMI CSMG and %d EPOINTs: the surfaces are the\n"
+                "extra points, CSMG column i on the i-th extra point in id\n"
+                "order, their downwash D1JE = D1JK G_ka CSMA and D2JE = D2JK\n"
+                "G_ka CSMA (the spline of each unit rotation): the columns\n"
+                "SOL 145's control deck gives QHHL. A TF on each extra point\n"
+                "holds it to its load; the surface has no inertia of its own.",
+                dyn_ne);
+        }
+        msc_op4_alter(fp, rf, &aa);
     }
     fprintf(fp, "CEND\n");
 

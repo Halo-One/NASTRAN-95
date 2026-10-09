@@ -1172,6 +1172,25 @@ static void translate_bulk(msc_ctx *x)
          * the solver's order after this pass                           */
         if (x->dyn && msc_dyn_card(c)) continue;
 
+        /* SOL 145 / 146: the GUST cards are noted by mscdyn.c; a spanwise
+         * SOL 146 deck's (a seventh field, SHAPE: the column of DMI
+         * WGSPAN that weights each box's downwash) are written there,
+         * one per id with the WGSPAN the GUST module reads             */
+        if (x->dyn && msc_streq(n, "GUST")) {
+            int how = msc_dyn_gust(c);
+            if (how == 1) {
+                msc_tally("GUST SHAPE -> GUST set + WGSPAN", "GUST");
+                continue;
+            }
+            if (how == 2) {
+                msc_card *o = emit(x, "GUST");
+                int k;
+                for (k = 1; k <= 5; k++) msc_set(o, k, msc_f(c, k));
+                msc_tally("GUST SHAPE dropped (SOL 145)", "GUST");
+                continue;
+            }
+        }
+
         if (msc_streq(n, "RBAR"))        { do_rigid_bar(x, c); continue; }
         if (msc_streq(n, "RBE2"))        { do_rbe2(x, c);      continue; }
         if (msc_streq(n, "CBUSH"))       { do_cbush(x, c);     continue; }
@@ -1676,7 +1695,7 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     int         rf = 0, rc, i;
     int         spc_sel = 0, method_sel = 0;
     int         ngrid;
-    int         dyn_wkk = 0, dyn_dje = 0, dyn_ne = 0;
+    int         dyn_wkk = 0, dyn_dje = 0, dyn_ne = 0, dyn_gust = 0, dyn_wgspan = 0;
 
     memset(&x, 0, sizeof(x));
     x.d = d;
@@ -1728,6 +1747,7 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     /* SOL 145 / 146: the aerodynamic corrections (mscdyn.c)            */
     msc_dyn_reset(rf);
     x.dyn = (rf == 10 || rf == 11);
+    if (x.dyn) msc_dyn_scan(d);
 
     {
         /* a restart's modes deck has its ids numbered with this one's */
@@ -1761,6 +1781,7 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
             msc_msg_quiet(0);
         }
         bad = msc_dyn_emit(d, have_rd ? &rd : NULL, &x.out, &dyn_wkk, &dyn_dje, &dyn_ne);
+        if (!bad) bad = msc_dyn_gust_emit(d, have_rd ? &rd : NULL, &x.out, &dyn_gust, &dyn_wgspan);
         if (have_rd) msc_free(&rd);
         if (bad) return 1;
     }
@@ -1839,6 +1860,51 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
         aa.wkk     = dyn_wkk;
         aa.dje     = dyn_dje;
         aa.csep    = csmg && rf == 11 && dyn_ne > 0 && !dyn_dje;
+        aa.gust    = dyn_gust;
+        aa.wgspan  = dyn_wgspan;
+        if ((rf == 10 || rf == 11) && msc_op4_wants("QHGL")) {
+            /* OUTPUT4 QHG: GUSTQ needs AMP's per-box matrix QHJL, which
+             * PARAM GUSTAERO asks for, and the reference semichord (the
+             * AERO card's REFC / 2; a restart's modes deck may hold it) */
+            int gaero = 0, w;
+            aa.bref = 0.0;
+            for (w = 0; w < 2; w++) {
+                msc_deck rd2;
+                const msc_deck *e = d;
+                int have = 0;
+                if (w == 1) {
+                    if (aa.bref > 0.0 || !g_restart_deck[0]) break;
+                    msc_msg_quiet(1);
+                    have = msc_read(g_restart_deck, &rd2) == 0;
+                    msc_msg_quiet(0);
+                    if (!have) break;
+                    e = &rd2;
+                }
+                for (ic = 0; ic < e->nbulk; ic++) {
+                    const msc_card *c = &e->bulk[ic];
+                    char pn[MSC_FLDLEN];
+                    if (c->dropped) continue;
+                    if (msc_streq(c->name, "AERO") && aa.bref <= 0.0) aa.bref = 0.5 * msc_fd(c, 3, 0.0);
+                    if (!msc_streq(c->name, "PARAM")) continue;
+                    strncpy(pn, msc_f(c, 1), sizeof(pn) - 1);
+                    pn[sizeof(pn) - 1] = '\0';
+                    msc_upper(pn);
+                    if (msc_streq(pn, "GUSTAERO")) gaero = 1;
+                }
+                if (have) msc_free(&rd2);
+            }
+            if (!gaero || aa.bref <= 0.0) {
+                msc_msg(MSC_FATAL, 9240,
+                    "OUTPUT4 QHG (the gust columns per (Mach, k) pair) needs %s.\n"
+                    "FIX   %s",
+                    !gaero ? "AMP's per-box matrix QHJL, which PARAM GUSTAERO asks for"
+                           : "the AERO card's REFC (the reference chord)",
+                    !gaero ? "Add PARAM,GUSTAERO,-1 to the deck."
+                           : "Give the AERO card its REFC.");
+                fclose(fp);
+                return 1;
+            }
+        }
         if (csmg && rf != 10 && !aa.csep) {
             if (rf == 11)
                 msc_msg(MSC_WARN, 9135, "DMI CSMG (control-surface modes) is only acted on "
@@ -1925,7 +1991,30 @@ case_control:
             }
         }
     }
-    one_aero_subcase(d, rf);
+    /* a spanwise gust deck (mscdyn.c) may give each GUST id (a set of
+     * cards, a shape or a sum of segments) a subcase of its own: AERO 11
+     * takes every subcase (GUST1 a gust per case control record, FRLG a
+     * load per subcase, FRRD2 solves them all, RANDOM adds their PSDs by
+     * the RANDPS cards - every subcase needs one, and NASA's RAND2 stops
+     * on a cross-spectrum, J < K), so such a deck keeps its subcases;
+     * any other SOL 145 / 146 deck is cut to its first, as it always was */
+    if (rf == 11 && dyn_gust) {
+        int ic, nsub = 0;
+        for (ic = 0; ic < d->ncase; ic++) {
+            const char *p = d->cases[ic];
+            while (*p == ' ' || *p == '\t') p++;
+            if (!strncmp(p, "SUBCASE", 7) || !strncmp(p, "subcase", 7)) nsub++;
+        }
+        if (nsub > 1)
+            msc_msg(MSC_INFO, 9239,
+                "%d subcases are kept: a spanwise gust deck may give each GUST\n"
+                "id a subcase of its own, and AERO 11 solves every subcase and\n"
+                "RANDOM adds them by the RANDPS cards (one for every subcase,\n"
+                "a zero one for a subcase left out; NASA's RAND2 stops on a\n"
+                "cross-spectrum, J < K).", nsub);
+    } else {
+        one_aero_subcase(d, rf);
+    }
     {
         /* the case control's SET lists and XY points follow the ids */
         int iter = 0, old, new_id;

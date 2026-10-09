@@ -56,14 +56,45 @@
  *
  * Without any of these cards nothing here writes anything, and the deck
  * goes to the solver as it did before.
+ *
+ * The spanwise gust (SOL 146). A GUST card of this dialect may carry a
+ * seventh field, SHAPE: 0 the uniform gust, m > 0 the m-th column of a
+ * DMI named WGSPAN (the j set - the boxes in ascending id, as above - by
+ * the shapes, real), a weight on each box's gust downwash:
+ *
+ *   w_j(omega) = WG WGSPAN(j, m) cos(gamma_j) exp(-i omega (x_j - X0) / V)
+ *
+ * with the card's own WG, X0 and V (VehicleDesign
+ * ase/gust/spanwise_gust_scheme.md, part 2). Several GUST cards may share
+ * an id: the subcase that selects it (GUST = id) is loaded by all of them
+ * together, each with its shape, WG, X0 and V - a gust in spanwise
+ * segments that arrive at different times is one such set, a card per
+ * segment - and they share the one DLOAD of their subcase (a set whose
+ * cards name different DLOADs is refused). Different ids are different
+ * subcases, which RANDOM adds by their RANDPS cards (NASA's RAND2 stops
+ * on a cross-spectrum between two, SFM 3002, in AERO 11). MSC's GUST
+ * has neither the field nor the sets, and NASTRAN-95's IFP reads five
+ * fields, so once any GUST card of a SOL 146 deck has a seventh field
+ * (0 included) the GUST cards are taken out here and written back as one
+ * GUST card per id (the first card's fields: its DLOAD is the subcase's),
+ * with the matrix the GUST module reads: DMI WGSPAN, the j set plus four
+ * rows by a column per GUST card of the deck (ascending id, the deck's
+ * order within an id) - the card's shape (ones for SHAPE 0), then its WG,
+ * X0, V and id, the last four written as the card spells them. The alter
+ * (mscop4.c, ALTER 94) hands it to GUST as its sixth input, which the
+ * rigid format leaves empty: GUST2 builds a downwash column per card at
+ * every frequency, with the card's X0 and V, and GUST3 loads each subcase
+ * with the sum over the cards of its id, each times its WG. Without a
+ * seventh field on any GUST card nothing here writes anything either.
  */
 #include "msc.h"
 #include <ctype.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { DYN_WKK = 0, DYN_WTF, DYN_D1JE, DYN_D2JE, DYN_N };
-static const char *dyn_name[DYN_N] = { "WKK", "WTFACT", "D1JE", "D2JE" };
+enum { DYN_WKK = 0, DYN_WTF, DYN_D1JE, DYN_D2JE, DYN_WGS, DYN_N };
+static const char *dyn_name[DYN_N] = { "WKK", "WTFACT", "D1JE", "D2JE", "WGSPAN" };
 
 typedef struct { int r, rc, c, cc; double v; } dyn_el;
 
@@ -77,12 +108,22 @@ typedef struct {
     char    file[MSC_PATHLEN];
 } dyn_mat;
 
+/* a GUST card of the deck: its id, SHAPE (field 7, 0 when blank), DLOAD,
+ * the deck's order, and the text of its five fields (SID DLOAD WG X0 V) */
+typedef struct {
+    int    sid, shape, dload, at, line;
+    char   f[5][MSC_FLDLEN];
+} dyn_gust;
+
 static struct {
     int     active;              /* rigid format 10 or 11                     */
     int     rf;
     dyn_mat dmi[DYN_N];          /* the DMI spelling                          */
     dyn_mat ids[DYN_N];          /* DMIK (WKK, WTFACT) / DMIJ (D1JE, D2JE)    */
     int     static_left;         /* DMIJ W2GJ / FA2J left out                 */
+    int     span;                /* SOL 146 with a seventh GUST field         */
+    dyn_gust *gust;              /* the GUST cards, as the deck gives them    */
+    int     ngust, gcap;
 } G;
 
 static void mat_free(dyn_mat *M)
@@ -98,6 +139,25 @@ void msc_dyn_reset(int rf)
     G.active = (rf == 10 || rf == 11);
     G.rf = rf;
     G.static_left = 0;
+    G.span = 0;
+    free(G.gust);
+    G.gust = NULL;
+    G.ngust = G.gcap = 0;
+}
+
+/* before the bulk data pass: a SOL 146 deck any of whose GUST cards has a
+ * seventh field (SHAPE, 0 included) is a spanwise gust deck, whose GUST
+ * cards this file writes (msc_dyn_gust_emit)                           */
+void msc_dyn_scan(const msc_deck *d)
+{
+    int i, k;
+    G.span = 0;
+    if (G.rf != 11) return;
+    for (i = 0; i < d->nbulk && !G.span; i++) {
+        const msc_card *c = &d->bulk[i];
+        if (c->dropped || !msc_streq(c->name, "GUST")) continue;
+        for (k = 6; k <= c->nfld; k++) if (!msc_blank(c, k)) G.span = 1;
+    }
 }
 
 static int name_index(const char *name)
@@ -158,6 +218,7 @@ static void take_dmi(const msc_card *c, dyn_mat *M, const char *name)
                 "FIX   Write it with TIN 1 or 2.", name, tin, name,
                 (name[0] == 'D') ? "D1JE is the real and D2JE the imaginary part's\n"
                                    "coefficient (w = (D1JE + i k D2JE) u_e)"
+                : msc_streq(name, "WGSPAN") ? "a weight on each box's gust downwash"
                                  : "a weight on each box force and moment");
         if (M->form == 3 || M->form == 8) M->n = 1;
         return;
@@ -739,5 +800,334 @@ int msc_dyn_emit(const msc_deck *d, const msc_deck *also, msc_list *out, int *wk
     }
     free(box);
     free(ep);
+    return msc_nfatal() ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* the spanwise gust: GUST's SHAPE (field 7), sets of GUST cards, WGSPAN */
+
+static void add_gust(const msc_card *c, int shape)
+{
+    dyn_gust *g;
+    int k;
+    if (G.ngust == G.gcap) {
+        G.gcap = G.gcap ? 2 * G.gcap : 16;
+        G.gust = (dyn_gust *) msc_realloc(G.gust, sizeof(dyn_gust) * (size_t) G.gcap);
+    }
+    g = &G.gust[G.ngust];
+    memset(g, 0, sizeof(*g));
+    g->sid   = msc_fi(c, 1, 0);
+    g->dload = msc_fi(c, 2, 0);
+    g->shape = shape;
+    g->at    = G.ngust++;
+    g->line  = c->line;
+    for (k = 0; k < 5; k++) {
+        strncpy(g->f[k], msc_f(c, k + 1), MSC_FLDLEN - 1);
+        g->f[k][MSC_FLDLEN - 1] = '\0';
+    }
+}
+
+/* the SHAPE of a GUST card (field 7 of the card, msc_f 6): 0 when blank;
+ * a fatal for anything but a whole number >= 0                           */
+static int gust_shape(const msc_card *c)
+{
+    const char *f = msc_f(c, 6);
+    if (!*f) return 0;
+    if (!fld_is_int(f) || atoi(f) < 0) {
+        msc_msg_at(MSC_FATAL, 9240, c,
+            "GUST %d: SHAPE (field 7) is \"%s\"; it is a column of DMI\n"
+            "WGSPAN, a whole number (0: the uniform gust).",
+            msc_fi(c, 1, 0), f);
+        return 0;
+    }
+    return atoi(f);
+}
+
+/* one GUST card of a SOL 145 / 146 deck, noted: 0 when it goes through as
+ * it is, 1 when this file writes it (a spanwise SOL 146 deck), 2 when it
+ * is to be written without its fields past V (a SOL 145 deck: the
+ * flutter solution has no gust)                                         */
+int msc_dyn_gust(const msc_card *c)
+{
+    int i, extra = 0;
+    if (!G.active) return 0;
+    add_gust(c, gust_shape(c));
+    for (i = 6; i <= c->nfld; i++) if (!msc_blank(c, i)) extra = 1;
+    for (i = 7; i <= c->nfld; i++)
+        if (!msc_blank(c, i)) {
+            msc_msg_at(MSC_WARN, 9239, c, "GUST %d: fields past SHAPE (field 7) are not read;\n"
+                       "\"%s\" in field %d is left out.", msc_fi(c, 1, 0), msc_f(c, i), i + 1);
+            break;
+        }
+    if (G.span) return 1;
+    return extra ? 2 : 0;
+}
+
+/* by id, then the deck's order                                           */
+static int cmp_gust(const void *a, const void *b)
+{
+    const dyn_gust *p = (const dyn_gust *) a, *q = (const dyn_gust *) b;
+    if (p->sid != q->sid) return (p->sid > q->sid) - (p->sid < q->sid);
+    return (p->at > q->at) - (p->at < q->at);
+}
+
+/* a GUST field written into WGSPAN as the card spells it, but as a real:
+ * an integer in a DMI column is a row number                            */
+static void real_text(char *out, const char *f)
+{
+    snprintf(out, MSC_FLDLEN, "%s", *f ? f : "0.0");
+    if (fld_is_int(out) && strlen(out) + 1 < MSC_FLDLEN) strcat(out, ".");
+}
+
+/* the solver's DMI WGSPAN: the header, nb + 4 rows by ncol             */
+static void wgspan_header(msc_list *out, int nb, int ncol)
+{
+    msc_card *o = msc_list_add(out, "DMI");
+    msc_set (o, 1, "WGSPAN");
+    msc_seti(o, 2, 0);
+    msc_seti(o, 3, 2);
+    msc_seti(o, 4, 1);
+    msc_seti(o, 5, 0);
+    msc_set (o, 6, "");
+    msc_seti(o, 7, nb + 4);
+    msc_seti(o, 8, ncol);
+}
+
+/* one column of it, a card: shape `shape` of the user's WGSPAN W (ones
+ * for 0) on the nb boxes - the row before each value, zero weights left
+ * out, the last given of a repeated row standing - then rows nb+1 .. nb+4,
+ * WG, X0, V and the id, as given                                         */
+static void wgspan_column(msc_list *out, int col, int nb, const dyn_mat *W, int shape,
+                          const char *wg, const char *x0, const char *v, const char *id)
+{
+    msc_card *o = msc_list_add(out, "DMI");
+    char      txt[MSC_FLDLEN];
+    int       f = 3, last = 0, j;
+    msc_set (o, 1, "WGSPAN");
+    msc_seti(o, 2, col);
+    if (shape == 0) {
+        msc_seti(o, f++, 1);
+        for (j = 1; j <= nb; j++) msc_set(o, f++, "1.0");
+    } else {
+        double *c = (double *) msc_alloc(sizeof(double) * (size_t) (nb + 1));
+        char   *has = (char *) msc_alloc((size_t) (nb + 1));
+        memset(has, 0, (size_t) (nb + 1));
+        for (j = 0; j <= nb; j++) c[j] = 0.0;
+        for (j = 0; j < W->ne; j++) {
+            const dyn_el *e = &W->e[j];
+            if (e->c != shape || e->r < 1 || e->r > nb) continue;
+            c[e->r] = e->v;
+            has[e->r] = 1;
+        }
+        /* the first value's row is always given (the card's I1), a later
+         * one's when it does not follow the row before                 */
+        for (j = 1; j <= nb; j++) {
+            if (!has[j] || c[j] == 0.0) continue;
+            if (last == 0 || j != last + 1) msc_seti(o, f++, j);
+            msc_setd(o, f++, c[j]);
+            last = j;
+        }
+        free(c);
+        free(has);
+    }
+    msc_seti(o, f++, nb + 1);
+    real_text(txt, wg); msc_set(o, f++, txt);
+    real_text(txt, x0); msc_set(o, f++, txt);
+    real_text(txt, v);  msc_set(o, f++, txt);
+    real_text(txt, id); msc_set(o, f++, txt);
+}
+
+/* OUTPUT4 QHG of a deck that is no spanwise gust deck (SOL 145, or SOL 146
+ * without a SHAPE field): the gust columns GUSTQ forms per (Mach, k) pair,
+ * one per column of the user's DMI WGSPAN at X0 = 0 (the basic origin,
+ * the plant's reference), written as the solver's WGSPAN (WG 1, X0 0, V 1,
+ * the column's number); no WGSPAN: the uniform column, GUSTQ's default.
+ * *wgspan: written. 1 after a fatal                                      */
+static int export_wgspan(const msc_deck *d, const msc_deck *also, msc_list *out, int *wgspan)
+{
+    const dyn_mat *W = &G.dmi[DYN_WGS];
+    int           *box = NULL, nb, c;
+    char           id[MSC_FLDLEN];
+    if (!W->kind) {
+        msc_msg(MSC_INFO, 9239,
+            "OUTPUT4 QHG: the gust column of the uniform gust at X0 = 0 per\n"
+            "(Mach, k) pair, Q_hg = QJHL' w (module GUSTQ). A DMI WGSPAN (a\n"
+            "row per CAERO1 box, a column per shape or segment) gives a\n"
+            "column per shape instead.");
+        return 0;
+    }
+    if (W->form != 1 && W->form != 2) {
+        msc_msg(MSC_FATAL, 9240,
+            "DMI WGSPAN has FORM %d. It is a rectangular matrix (FORM 2),\n"
+            "a row per box and a column per shape.", W->form);
+        return 1;
+    }
+    nb = deck_boxes(d, also, &box);
+    if (nb < 0) return 1;
+    free(box);
+    if (W->m != nb) {
+        msc_msg(MSC_FATAL, 9240,
+            "DMI WGSPAN is %d x %d and the j set of the model's CAERO1\n"
+            "boxes is %d (a row per box, the boxes in ascending id).\n"
+            "FIX   Write it with %d rows.", W->m, W->n, nb, nb);
+        return 1;
+    }
+    wgspan_header(out, nb, W->n);
+    for (c = 1; c <= W->n; c++) {
+        snprintf(id, sizeof(id), "%d", c);
+        wgspan_column(out, c, nb, W, c, "1.0", "0.0", "1.0", id);
+    }
+    *wgspan = 1;
+    msc_msg(MSC_INFO, 9239,
+        "OUTPUT4 QHG: a gust column per column of DMI WGSPAN (%d), per\n"
+        "(Mach, k) pair, at X0 = 0: Q_hg(c) = QJHL' (WGSPAN(:, c)\n"
+        "cos(gamma) exp(-i k x / b)) (module GUSTQ after AMP). Written as\n"
+        "DMI WGSPAN, %d x %d (the shapes, then WG 1, X0 0, V 1 and the\n"
+        "column's number).", W->n, nb + 4, W->n);
+    return msc_nfatal() ? 1 : 0;
+}
+
+/* after the bulk data pass of a spanwise SOL 146 deck: one GUST card per
+ * id, and the GUST module's DMI WGSPAN (the j set plus WG, X0, V and the
+ * id, a column per card), written into `out`; of any other SOL 145 / 146
+ * deck with OUTPUT4 QHG, the WGSPAN GUSTQ reads. *gust says the alter has
+ * to pass WGSPAN to GUST (ALTER 94), *wgspan that the deck has the
+ * solver's WGSPAN. `also`: a restart's modes deck. 1 after a fatal       */
+int msc_dyn_gust_emit(const msc_deck *d, const msc_deck *also, msc_list *out, int *gust,
+                      int *wgspan)
+{
+    const dyn_mat *W = &G.dmi[DYN_WGS];
+    int           *box = NULL, nb, ng, i, nshaped = 0, maxshape = 0, nsets = 0;
+    int            want = msc_op4_wants("QHGL");
+
+    *gust = 0;
+    *wgspan = 0;
+    if (!G.active) return 0;
+    for (i = 0; i < G.ngust; i++) {
+        if (G.gust[i].shape > 0) nshaped++;
+        if (G.gust[i].shape > maxshape) maxshape = G.gust[i].shape;
+    }
+    if (G.rf != 11 || !G.span) {
+        if (G.rf != 11 && nshaped)
+            msc_msg(MSC_INFO, 9239, "%d GUST card%s name%s a SHAPE (field 7); SOL 145 has no\n"
+                    "gust, and the field is left out.", nshaped, nshaped == 1 ? "" : "s",
+                    nshaped == 1 ? "s" : "");
+        if (want) return export_wgspan(d, also, out, wgspan);
+        if (W->kind)
+            msc_msg(MSC_WARN, 9239, "DMI WGSPAN (the spanwise gust's shapes) is given, and no\n"
+                    "GUST card has a SHAPE (field 7) and no OUTPUT4 QHG asks\n"
+                    "for the gust columns: it is left out.");
+        return msc_nfatal() ? 1 : 0;
+    }
+    /* a restart's modes deck with GUST cards: not a spanwise deck's case */
+    if (also) {
+        for (i = 0; i < also->nbulk; i++)
+            if (!also->bulk[i].dropped && msc_streq(also->bulk[i].name, "GUST")) {
+                msc_msg(MSC_FATAL, 9240,
+                    "The restart's modes deck has GUST cards too. A spanwise\n"
+                    "gust deck's GUST cards are all written by the front end;\n"
+                    "give them in the gust deck alone.");
+                return 1;
+            }
+    }
+    if (maxshape > 0 && !W->kind) {
+        for (i = 0; i < G.ngust; i++) if (G.gust[i].shape > 0) break;
+        msc_msg(MSC_FATAL, 9240,
+            "GUST %d names SHAPE %d (field 7: a column of DMI WGSPAN,\n"
+            "the weight on each box's gust downwash) and the deck has no\n"
+            "DMI WGSPAN.\n"
+            "FIX   Give the shapes as DMI WGSPAN, a row per CAERO1 box in\n"
+            "      ascending id and a column per shape.",
+            G.gust[i].sid, G.gust[i].shape);
+        return 1;
+    }
+    /* the cards by id (the DIT's order), the deck's order within an id   */
+    qsort(G.gust, (size_t) G.ngust, sizeof(dyn_gust), cmp_gust);
+    ng = G.ngust;
+    for (i = 0; i < ng; i++) {
+        if (i > 0 && G.gust[i].sid == G.gust[i - 1].sid) {
+            if (G.gust[i].dload != G.gust[i - 1].dload) {
+                msc_msg(MSC_FATAL, 9240,
+                    "The GUST cards of id %d name DLOAD %d and %d. The cards\n"
+                    "of one id load one subcase together, and a subcase has\n"
+                    "one load: its frequency (or time) function.\n"
+                    "FIX   Give the cards of an id the same DLOAD, or give each\n"
+                    "      its own id (a subcase each).",
+                    G.gust[i].sid, G.gust[i - 1].dload, G.gust[i].dload);
+                return 1;
+            }
+            continue;
+        }
+        nsets++;
+    }
+    if (W->kind && W->form != 1 && W->form != 2) {
+        msc_msg(MSC_FATAL, 9240,
+            "DMI WGSPAN has FORM %d. It is a rectangular matrix (FORM 2),\n"
+            "a row per box and a column per shape.", W->form);
+        return 1;
+    }
+    nb = deck_boxes(d, also, &box);
+    if (nb < 0) return 1;
+    free(box);
+    if (nb == 0) {
+        msc_msg(MSC_FATAL, 9240, "The GUST cards have a SHAPE field and the model has no\n"
+                "CAERO1 panel: there is no box to weight.");
+        return 1;
+    }
+    if (W->kind && W->m != nb) {
+        msc_msg(MSC_FATAL, 9240,
+            "DMI WGSPAN is %d x %d and the j set of the model's CAERO1\n"
+            "boxes is %d (a row per box, the boxes in ascending id).\n"
+            "FIX   Write it with %d rows.", W->m, W->n, nb, nb);
+        return 1;
+    }
+    if (W->kind && maxshape > W->n) {
+        for (i = 0; i < ng; i++) if (G.gust[i].shape == maxshape) break;
+        msc_msg(MSC_FATAL, 9240, "GUST %d names SHAPE %d and DMI WGSPAN has %d column%s.",
+                G.gust[i].sid, maxshape, W->n, W->n == 1 ? "" : "s");
+        return 1;
+    }
+
+    /* one GUST card per id, the first card's fields (its DLOAD is the
+     * subcase's; in the module the cards' own WG, X0, V are WGSPAN's)   */
+    for (i = 0; i < ng; i++) {
+        msc_card *o;
+        int k;
+        if (i > 0 && G.gust[i].sid == G.gust[i - 1].sid) continue;
+        o = msc_list_add(out, "GUST");
+        for (k = 0; k < 5; k++) msc_set(o, k + 1, G.gust[i].f[k]);
+    }
+
+    /* DMI WGSPAN: nb + 4 rows by a column per card - the weights (the
+     * shape's column, ones for SHAPE 0), then WG, X0, V and the id as the
+     * card spells them                                                   */
+    wgspan_header(out, nb, ng);
+    for (i = 0; i < ng; i++) {
+        const dyn_gust *g = &G.gust[i];
+        wgspan_column(out, i + 1, nb, W, g->shape, g->f[2], g->f[3], g->f[4], g->f[0]);
+    }
+    {
+        char list[600];
+        size_t at = 0;
+        list[0] = '\0';
+        for (i = 0; i < ng && at < sizeof(list) - 60; i++)
+            at += (size_t) snprintf(list + at, sizeof(list) - at, "%s%d:%d", i ? ", " : "",
+                                    G.gust[i].sid, G.gust[i].shape);
+        if (i < ng) snprintf(list + at, sizeof(list) - at, ", ...");
+        msc_msg(MSC_INFO, 9239,
+            "The spanwise gust: %d GUST card%s in %d set%s (id:SHAPE %s).\n"
+            "Each card weights each box's gust downwash by its shape\n"
+            "(SHAPE m: column m of DMI WGSPAN%s; 0 the uniform gust) with\n"
+            "its own WG, X0 and V, w_j = WG psi(j) cos(gamma_j)\n"
+            "exp(-i w (x_j - X0) / V), and the cards of one id load the\n"
+            "subcase that selects it together. Written as one GUST card\n"
+            "per id and DMI WGSPAN, %d x %d: the boxes in ascending id,\n"
+            "then WG, X0, V and the id, by a column per card; GUST's sixth\n"
+            "input (ALTER 94).",
+            ng, ng == 1 ? "" : "s", nsets, nsets == 1 ? "" : "s", list,
+            W->kind ? "" : ", not given", nb + 4, ng);
+    }
+    *gust = 1;
+    *wgspan = 1;
     return msc_nfatal() ? 1 : 0;
 }

@@ -85,6 +85,10 @@ static const struct { const char *msc, *cosmic; } dbmap[] = {
     { "WKK",  "WKK"  }, { "SKJ",  "SKJ"  },
     { "D1JE", "D1JE" }, { "D2JE", "D2JE" },
     { "D1JK", "D1JK" }, { "D2JK", "D2JK" }, { "GTKA", "GTKA" },
+    /* the spanwise gust's weights as the GUST module reads them (mscdyn.c),
+     * and the gust columns per (Mach, k) pair module GUSTQ forms from
+     * them after AMP: a column per WGSPAN column, MSC's QHG              */
+    { "WGSPAN", "WGSPAN" }, { "QHG", "QHGL" }, { "QHGL", "QHGL" },
     { NULL, NULL }
 };
 
@@ -184,7 +188,8 @@ int msc_op4_scan(msc_deck *d)
                             "NASTRAN-95 calls that data block. It knows PHG (the\n"
                             "g-set mode shapes), MGG, KGG, PHA, MAA, KAA and, in the\n"
                             "aero rigid formats, QHHL, QHJL, QKHL, MHH, KHH, BHH, PHDH,\n"
-                            "CSMA, WKK, SKJ, D1JE, D2JE, D1JK, D2JK and GTKA.\n"
+                            "CSMA, WKK, SKJ, D1JE, D2JE, D1JK, D2JK, GTKA, WGSPAN and\n"
+                            "QHG.\n"
                             "FIX   Ask for one of those, or add the name to mscop4.c.",
                             db);
                 }
@@ -224,6 +229,13 @@ int msc_op4_scan(msc_deck *d)
 
 int msc_op4_count(void) { return nreq; }
 
+int msc_op4_wants(const char *cosmic)
+{
+    int k;
+    for (k = 0; k < nreq; k++) if (msc_streq(reqs[k].cosmic, cosmic)) return 1;
+    return 0;
+}
+
 /* the alter, into the executive control.
  *
  * a->csmodes  SOL 145 with a DMI CSMG: the control-surface modes joined to
@@ -248,21 +260,35 @@ int msc_op4_count(void) { return nreq; }
  *             control input: a TF holds each extra point to its load, and
  *             the surface moves the air with no structural inertia of its
  *             own.
+ * a->gust     SOL 146 with GUST SHAPE and DMI WGSPAN (mscdyn.c, written
+ *             back as the j set by a column per GUST card): statement 94,
+ *             the GUST call, again with WGSPAN as its sixth input, which
+ *             AERO 11 leaves empty - the spanwise gust (mis/gust.f).
  * The COND at 86 jumps over the INPUTT2 unless PARAM NODJE is set, and so
  * over anything written in its place: hence 86-88, not 87 alone.
  * Without these the text is what it always was.                         */
+static void gust_alter(FILE *fp)
+{
+    /* AERO 11's statement 94 with WGSPAN in the sixth place, two lines as
+     * the rigid format has it (a DMAP statement continues after a /)   */
+    fprintf(fp, "ALTER   94,94 $\n");
+    fprintf(fp, "GUST    CASECC,DLT,FRL,DIT,QHJL,WGSPAN,,ACPT,CSTMA,PHF1/PHF/\n");
+    fprintf(fp, "        S,N,NOGUST/BOV/C,Y,MACH/C,Y,Q $\n");
+}
+
 void msc_op4_alter(FILE *fp, int rf, const msc_aero_alter *a)
 {
     int k, any = 0, always = 0;
-    int csmodes = 0, wkk = 0, dje = 0, csep = 0;
+    int csmodes = 0, wkk = 0, dje = 0, csep = 0, gust = 0;
     for (k = 0; k < nreq; k++) if (reqs[k].cosmic[0]) any = 1;
     if (a && (rf == 10 || rf == 11)) {
         csmodes = a->csmodes && rf == 10;
         wkk     = a->wkk;
         dje     = a->dje;
         csep    = a->csep && rf == 11 && !a->dje;
+        gust    = a->gust && rf == 11;
     }
-    if (!any && !csmodes && !wkk && !dje && !csep) return;
+    if (!any && !csmodes && !wkk && !dje && !csep && !gust) return;
     if (csmodes) {
         /* the control-surface modes (DMI CSMG, g-set rows, a column per
          * surface) joined to the modal basis after GKAM (statement 70):
@@ -315,6 +341,7 @@ void msc_op4_alter(FILE *fp, int rf, const msc_aero_alter *a)
             fprintf(fp, "ALTER   90 $\n");
             fprintf(fp, "EXIT $\n");
         }
+        if (gust) gust_alter(fp);
         fprintf(fp, "ENDALTER $\n");
         return;
     }
@@ -332,11 +359,20 @@ void msc_op4_alter(FILE *fp, int rf, const msc_aero_alter *a)
             "11 (SOL 146) only; this deck's rigid format %d gets no matrix output.", rf);
         return;
     }
+    /* OUTPUT4 QHG: the gust columns per (Mach, k) pair formed from AMP's
+     * per-box matrix QHJL (which PARAM GUSTAERO asks AMP for) and the
+     * solver's WGSPAN (mscdyn.c; none, the uniform column) by GUSTQ
+     * (mis/gustq.f), phased with the reference semichord               */
+    if ((rf == 10 || rf == 11) && msc_op4_wants("QHGL") && a)
+        fprintf(fp, "GUSTQ   QHJL,ACPT,%s/QHGL/C,N,%.6E $\n", a->wgspan ? "WGSPAN" : "",
+                a->bref);
     for (k = 0; k < nreq; k++)
         if (reqs[k].cosmic[0])
             fprintf(fp, "OUTPUT4 %s,,,,//-1/%d/2 $\n", reqs[k].cosmic, reqs[k].n95unit);
     /* the widened basis stops here: FA1 would take QHHL for the modes' */
     if (csmodes) fprintf(fp, "EXIT $\n");
+    /* the spanwise gust, after the OUTPUT4 at 90 (alters ascend)       */
+    if (gust) gust_alter(fp);
     fprintf(fp, "ENDALTER $\n");
 }
 

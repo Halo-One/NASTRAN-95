@@ -1793,3 +1793,111 @@ files Simcenter's corrected export ran):
 One print of the 1-cos deck lost 146 rows of one point's table in one run, with the
 same deck and OUTPUT4 files; a rerun printed the reference to the bit. The machine was
 out of commit memory at the time (fork failures beside it).
+
+## SOL 146: the spanwise gust - shapes, segments, swept fronts - and the gust columns per pair (GUSTQ)
+
+Branch `halo-ase-wkk`, after d60203e. VehicleDesign's `ase/gust/spanwise_gust_scheme.md`,
+part 2. NASA's GUST module forms one vertical gust, uniform across the span: the
+downwash on box j is w_j = cos(gamma_j) exp(-i omega (x_j - X0) / V) (GUST2, x_j the
+box's three-quarter-chord point and gamma_j its dihedral off ACPT), multiplied into the
+per-box matrix QHJL (GUST3) and scaled by q WG and the load's frequency function. Its
+DMAP call in AERO 11 leaves two of its ten inputs empty.
+
+**The dialect.** A GUST card may carry a seventh field, SHAPE: m > 0 is column m of a DMI
+named WGSPAN (a row per CAERO1 box - the j set, the boxes in ascending id as in the
+section above - and a column per shape, real), 0 the uniform gust. Each card weights the
+downwash by its shape and phases it with its own X0 and V:
+
+    w_j = WG psi_m(j) cos(gamma_j) exp(-i omega (x_j - X0) / V)
+
+and **several GUST cards may share an id**: the subcase that selects it (`GUST = id`) is
+loaded by all of them together, the loads summed, each with its own SHAPE, WG, X0 and V.
+A gust cut into spanwise segments (WGSPAN a 0/1 partition of the boxes into bands of y,
+VehicleDesign's `ase_gust_column 'segments'`) is one such set, a card per segment; with
+X0_m = x0 - (y_R - y_m) tan(Lambda) the front sweeps across the span (the right tip
+first). The cards of one id share the subcase's one DLOAD (a frequency or time function:
+the 1-cos TLOAD1, the PSD decks' RLOAD1). Different ids are different subcases, which
+RANDOM combines on RANDPS. MSC has neither the field nor the sets; Simcenter cannot run
+these decks.
+
+**The front end** (`msc/mscdyn.c`, `mscxlat.c`, `mscop4.c`):
+- A SOL 146 deck any of whose GUST cards has a seventh field (0 included) is a spanwise
+  deck (`msc_dyn_scan`, before the bulk pass). Its GUST cards are taken out and written
+  back as one GUST card per id (the first card's fields: its DLOAD is the subcase's), and
+  DMI WGSPAN is written back as the matrix the module reads: **nb + 4 rows by a column per
+  GUST card** (ascending id, the deck's order within an id) - the card's shape on the nb
+  boxes (ones for SHAPE 0), then its WG, X0, V and id, the last four copied as the card
+  spells them (as reals) so that the module's values are the GUST card's to the bit.
+- The alter `ALTER 94,94` writes AERO 11's GUST call again with WGSPAN in its sixth place
+  (after the OUTPUT4 alter at 90, so the alters ascend).
+- A spanwise deck keeps every subcase; any other SOL 145 / 146 deck is still cut to its
+  first (UWM 9115), as before.
+- Messages: UIM 9239 (the cards, the sets, what was written; kept subcases), UFM 9240
+  (a SHAPE and no WGSPAN, a WGSPAN not nb rows, a SHAPE past its columns, the cards of one
+  id on two DLOADs, a restart modes deck with GUST cards, not FORM 2), UWM 9239 (a WGSPAN
+  nothing uses). A GUST card of a SOL 145 deck is written without its field 7.
+
+**The module** (`mis/gust.f`, `gust1.f`, `gust2.f`, `gust3.f`; WGSPAN is file 106):
+- GUST1 writes the subcase's GUST id into word 1 of its GUSTL record (it was always 0;
+  NASA's `IGUST(1) = IGSID` beside it writes the LOCATE key, not GUSTL).
+- GUST2, with WGSPAN there, builds NCW WJ columns at every frequency (frequency by
+  frequency, the cards in order), column c with card c's weights, X0 and V. A weight of
+  1.0 and the card's own X0, V give NASA's column to the bit.
+- GUST3 multiplies each of them by QHJK (PDEL then has NCW columns a frequency) and loads
+  each subcase with the sum over the cards of its id of q WG_c PP PDEL_c, the first term
+  assigned and the rest added (one card gives NASA's load to the bit); a card of another
+  id is skipped (SKPREC).
+- WGSPAN purged (the rigid format as it is): the code is NASA's, unchanged.
+
+**The gust columns per (Mach, k) pair: module GUSTQ** (`mis/gustq.f`, new). For the
+state-space plant the ASE data carry the gust column QHG per pair (VehicleDesign forms it
+in MATLAB from the per-box export, 500 MB a Mach on the monarch). With `OUTPUT4 QHG` (MSC's
+name; QHGL here) and `PARAM,GUSTAERO,-1` in a SOL 145 or 146 deck, the alter at 90 runs
+
+    GUSTQ  QHJL,ACPT,WGSPAN/QHGL/C,N,BREF $
+
+after AMP: at every pair of QHJL (its header record holds them) and every WGSPAN column,
+QHGL(h, c) = sum_j QHJL(j, h) WGSPAN(j, c) cos(gamma_j) exp(-i k (x_j - X0_c) / BREF), the
+boxes as GUST2 takes them, the sums in double precision, NCOL rows by NCW columns a pair
+(complex single, the pairs in UIM 9457's order). BREF is the AERO card's REFC / 2 (the
+front end writes it). A deck that is no spanwise deck gives its WGSPAN (the user's n_j
+by n_shapes) the four trailing rows with X0 = 0 (the basic origin, the plant's reference);
+no WGSPAN: one column, the uniform gust at X0 = 0. MPL: GUSTQ takes the blank 20-word
+entry after OPTPR2 (position 84; 3 inputs, 1 output, BREF and six unused integers to fill
+the 20 words, so nothing after it moves), `mis/xsem00.f` label 2084 calls it, and the link
+table (`mis/xlnkdd.f`) grows by one entry to 980 words.
+
+**Not there:** RANDOM's cross-spectra between subcases (RANDPS J < K) stop in NASA's
+RAND2 (SFM 3002, EOF on OUPV2) in AERO 11, and so does a subcase with no RANDPS of its own
+(give it a zero one): a correlated field goes in as uncorrelated shapes (Karhunen-Loeve),
+or through VehicleDesign's `sol146_gust_response` with the cross-spectrum.
+
+**Checked on Windows** (a build of this tree; buster4's decks of 2026-10-08, PSD at 8.5 m/s
+EAS sea level and the 1-cos, 50 modes; VehicleDesign's MATLAB on the run's own QHH / QJHL /
+MHH / KHH / BHH export, the rows off a modes print of the same eigensolution - its
+frequencies the export's to 3.9e-7):
+- *No WGSPAN, bit for bit:* d60203e's prints and OUTPUT4 files, line for line, on the
+  10 test decks, buster4's modes, control, 1-cos, PSD, WKK and CSMG-made D1JE decks.
+- *The uniform shape:* the PSD deck with SHAPE 1 on a WGSPAN column of ones prints the
+  committed deck's results line for line after the sorted echo (3,814 lines), the 1-cos
+  deck likewise (876,477 lines).
+- *Segments:* eight equal bands of y over every surface, eight cards of one id at X0 0:
+  the PSDs within 3.9e-6 of each curve's peak of the uniform deck's, the 1-cos tables
+  within 3.1e-6 (structural grids; aero boxes' own tiny tables 7e-4 of theirs, 3e-6 of the
+  largest box table).
+- *Against sol146_gust_response (VehicleDesign, the same algebra on the export), every
+  curve (displacement and acceleration at the tip and the reference grid, the root bar's
+  two moments):* SHAPE 1 PSD within 4.0e-6 of each curve's peak; the eight segments 3.4e-6;
+  the **swept front** (45 deg, the right tip first: sum_m e^(i omega X0_m / V) H_m) 7.7e-5
+  (rms within 7e-6); four subcases of shapes ones / y / s / cos(pi y / s) / SHAPE 0 with
+  RANDPS on the diagonal 3.3e-6; the antisymmetric shape alone 1.8e-4 of its small
+  curves' peaks (it loads the plunge at 1.3 % of the uniform gust's: the model's own
+  asymmetry, MATLAB the same), the cos shape alone 2.1e-5.
+- *The swept 1-cos deck:* the right tip peaks at 0.82 s, the root at 1.20 s, the left tip
+  at 1.84 s (the uniform gust: 0.62 s everywhere).
+- *GUSTQ* (the control deck at Mach 0.05, five k, 124 columns a pair): the eight segment
+  columns within 3.4e-6 of ase_gust_column's on the same run's QJHL, the uniform column
+  5.5e-7, and the segments' sum within 1.4e-6 of the uniform column.
+- VehicleDesign's `test_nastran95ase_spanwise_gust` holds the same on the plate deck in
+  seconds: QHG's segments summing to the uniform column and equal to ase_gust_column's,
+  and a SOL 146 subcase of two segment cards printing the uniform card's PSD.

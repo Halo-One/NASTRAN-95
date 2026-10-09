@@ -212,7 +212,12 @@ C
      7, 11, 4HOFP ,4H    , 2, 6, 0, 0,  1, 0,  1,-1
      8, 10, 4HOPTP,4HR1  , 1, 5, 1, 1,  3*-1
      9, 12, 4HOPTP,4HR2  , 1, 3, 2, 0,  3*-1,  1, 0
-     M, 20, 19*0
+C    HALO: GUSTQ, THE GUST COLUMNS OF THE MODAL AERODYNAMICS PER (MACH,
+C    K) PAIR (MIS/GUSTQ.F): 3 INPUTS, 1 OUTPUT, BREF (REAL, GIVEN) AND
+C    SIX UNUSED INTEGERS, SO THAT IT TAKES THE 20 WORDS OF THE BLANK
+C    ENTRY THAT WAS HERE AND NO MODULE AFTER IT MOVES IN THE MPL
+     M, 20, 4HGUST,4HQ   , 1, 3, 1, 0, -2, 1, 0, 1, 0, 1, 0, 1, 0
+     *                               ,  1, 0, 1, 0
      Z/
 C
       DATA  MPL09 /

@@ -216,7 +216,14 @@ typedef struct {
                     * (mscdyn.c): the user-tape INPUTT2 (86-88) removed   */
     int csep;      /* SOL 146, DMI CSMG and EPOINTs, no D1JE / D2JE given:
                     * D1JE / D2JE made from the surfaces' rotations (86-88) */
+    int gust;      /* SOL 146, GUST SHAPE and DMI WGSPAN (mscdyn.c): the
+                    * spanwise weights as GUST's sixth input (statement 94) */
+    int wgspan;    /* the deck has the solver's DMI WGSPAN (mscdyn.c)      */
+    double bref;   /* OUTPUT4 QHG: the reference semichord (AERO REFC / 2)
+                    * GUSTQ phases the gust columns with, after AMP (90)   */
 } msc_aero_alter;
+/* whether an OUTPUT4 request of the deck writes this COSMIC data block */
+int  msc_op4_wants(const char *cosmic);
 void msc_op4_alter(FILE *fp, int rf, const msc_aero_alter *a);
 int  msc_op4_finish(void);
 void msc_op4_collect(const char (*child_dir)[32], const int *id, int n);
@@ -228,5 +235,14 @@ void msc_dyn_reset(int rf);
 int  msc_dyn_card(const msc_card *c);
 int  msc_dyn_emit(const msc_deck *d, const msc_deck *also, msc_list *out, int *wkk,
                   int *dje, int *ne);   /* also: a restart's modes deck */
+/* the spanwise gust: a SOL 146 deck whose GUST cards have a seventh field
+ * (SHAPE) found before the bulk pass; each GUST card noted (0 written as
+ * it is, 1 written by msc_dyn_gust_emit, 2 written without its fields
+ * past V); one GUST card per id and DMI WGSPAN (the GUST module's
+ * weights, WG, X0, V and id, a column per card) written after it      */
+void msc_dyn_scan(const msc_deck *d);
+int  msc_dyn_gust(const msc_card *c);
+int  msc_dyn_gust_emit(const msc_deck *d, const msc_deck *also, msc_list *out, int *gust,
+                       int *wgspan);
 
 #endif /* MSC_H */

@@ -233,6 +233,8 @@ void msc_op4_collect(const char (*child_dir)[32], const int *id, int n);
  * written back as DMIs in the solver's set order                       */
 void msc_dyn_reset(int rf);
 int  msc_dyn_card(const msc_card *c);
+/* a PAERO1 listing a body none of its panels reaches: UFM 9241       */
+int  msc_body_assoc_check(const msc_deck *d);
 int  msc_dyn_emit(const msc_deck *d, const msc_deck *also, msc_list *out, int *wkk,
                   int *dje, int *ne);   /* also: a restart's modes deck */
 /* the spanwise gust: a SOL 146 deck whose GUST cards have a seventh field

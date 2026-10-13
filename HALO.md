@@ -1901,3 +1901,71 @@ frequencies the export's to 3.9e-7):
 - VehicleDesign's `test_nastran95ase_spanwise_gust` holds the same on the plate deck in
   seconds: QHG's segments summing to the uniform column and equal to ase_gust_column's,
   and a SOL 146 subcase of two segment cards printing the uniform card's PSD.
+
+## Slender bodies: CAERO2 / PAERO2 in SOL 145 and 146
+
+NASTRAN-95 has the doublet lattice with bodies (DLB, NASA's Giesing-Kalman-Rodden method:
+`mis/apd2.f`, `fwmw.f`, `subi.f`, `fzy2.f` ...), but the MSC front end did not pass `CAERO2` /
+`PAERO2` (UFM 9299), and once it did the bodies' columns of the spline matrix came out NaN.
+Three changes and a guard make a monarch deck with its booms as slender bodies give
+Simcenter's answer.
+
+- **The front end** (`msc/mscxlat.c`) passes `CAERO2` and `PAERO2` (the same fields in both
+  dialects) and counts a body's elements, EID to EID + NSB + NINT - 1, among the ids it
+  renumbers around.
+- **`mis/gipsst.f`, a NASA bug that IEEE arithmetic exposes.** For a body's SPLINE2, GIPSST
+  sets the spline's DTHY to -1.0 (no rotation attachment) by `SCARD(10) = -1.0`, and `SCARD`
+  is the INTEGER name of a word whose REAL name is `SRARD`: the word holds the integer -1.
+  On the machines NASTRAN was written for those bits read as a negative real, as meant; in
+  IEEE they are a NaN, so `SRARD(10) .LT. 0.0` was false and LSPLIN took a NaN flexibility.
+  Every body's columns of GTKA were NaN, and with them QHH (printed as zeros by the OP4 of
+  a large deck, NaN in a small one) and a segmentation fault in the PK's eigenvectors. Now
+  `SRARD(10) = -1.0`. Found with the build's -g, `_controlfp` unmasking the invalid
+  operation and gdb: the first trap is the comparison at gipsst.f's `OYR` line.
+- **WKK, D1JE / D2JE and WGSPAN with bodies** (`msc/mscdyn.c`, the sections above). A body
+  is made with the panels of its interference group after the group's last panel, or after
+  all the panels when no CAERO1 shares its IGID (`apd12.f`), with NSB + NINT j-set elements
+  and 2 NSB k-set dofs per orientation (ZY: both; `apd2.f`). The front end checks that every
+  body comes after every box (no body sharing the IGID of a panel group before the last;
+  UFM 9232 otherwise), so the j and k sets are the boxes as before, then the bodies, in both
+  codes. Inside the bodies' block the two codes' orders differ (NASTRAN-95: interference
+  elements, then slender, by orientation), so the block is taken only where its order does
+  not matter: WKK on it a multiple of the identity with no term joining a body to a box
+  (the repository's corrected decks give it 1), D1JE / D2JE null on the body rows, WGSPAN
+  with no spanwise shape (SHAPE 0 writes 1 on every body row; a shape with bodies is UFM
+  9240). DMIJI is still left out (UWM 9234).
+- **The guard, UFM 9241: a PAERO1's associated bodies.** A PAERO1's B1..B6 are the bodies
+  its panels are attached to; DLB puts the image of each of their boxes inside each such
+  body (FWMW calling SUBI). A box r from the axis has its image a^2/r from it, of strength
+  ~ a^2/r^2, and the image's force on that body's own slender elements goes as one over its
+  distance from the axis squared: the product ~ 1/a^2 however far the box is. NASA's check
+  of where the sending point is (fwmw.f 5100-5600) is a stub. On the monarch, with every
+  panel listing every boom, QHH came out 10^3 - 10^5 times too large; with one boom at a
+  time 6 - 40 times (a boom whose fins share the PAERO1 with the wing and stabs) up to
+  10^7 (an outer boom, under the wing and an h-stab only); Simcenter on the same deck moved
+  QHH by a few percent. So the front end refuses a PAERO1 that lists a body one of its
+  panels is not attached to: the line of the panel's leading edge in the y-z plane passes
+  more than two interference radii (WIDTH across, WIDTH AR up) from the body's axis, or the
+  panel misses the body in x. Both monarch fin panels pass (their plane runs through the
+  boom's axis; the upper one starts 17 radii up), the wing and the stabs (5.5 - 5.8 radii
+  above the booms) do not. Panels or bodies in a CP system are not checked.
+
+**Checked on Windows** (a candidate build of this tree, Simcenter 2606 on the same decks;
+the solvers' modes differ in sign, so the comparisons are of the sign-free parts):
+- *The plate deck with a body* (`plate_flutter.dat`, a ZY pod of 8 slender and 4
+  interference elements under the panel, splined by SPLINE2 to two grids on RBARs): QHH at
+  Mach 0.1, k 0.02 / 0.2 / 1.2 within 0.14 - 0.22 % of Simcenter's (|Q| over the largest),
+  what the wing alone gives (0.14 - 0.22 %); the body's change of QHH's diagonal within
+  0.1 % of Simcenter's at each k.
+- *monarch_ff_asm8083* (120 modes and the four stab modes, 2,282 boxes, four booms of
+  41 / 58 / 58 / 41 slender and 16 / 23 / 23 / 16 interference elements, ORIENT ZY, the fins
+  associated with their booms): the bodies' change of QHH's diagonal within 0.5 % (k 0.005)
+  and 1.4 % (k 0.1) of its largest, Simcenter's against this build's; without bodies the two
+  agree to the printed digits on the diagonal. No body associated: the same change on the
+  wing modes, a third less on the tail modes than with the fins associated - the fins'
+  images matter, and are right.
+- *No CAERO2, the same prints*: the bodies' code runs only when a deck has one.
+
+Not done: a model of bodies alone, with no CAERO1, stops in AMG (SFM 3003, NASA's path with
+no panel); the batched in-core AMG (AMGK) takes a group of panels without bodies only,
+so a DLB group runs NASA's serial AMG; SOL 144 (AETRIM) has no bodies.

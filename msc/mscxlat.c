@@ -830,6 +830,10 @@ static const char *copy_cards[] = {
      * 2^24-1 in it is renumbered) - MSC's published examples use both */
     "AEFACT", "GENEL",
     "CAERO4", "PAERO4",   /* strip theory: SOL 144 divergence (HA145C) */
+    /* HALO (bodies): slender bodies with their interference tubes, the
+     * doublet lattice's body model (NASTRAN-95's DLB, mis/apd*.f); the
+     * same fields in both dialects                                      */
+    "CAERO2", "PAERO2",
     NULL
 };
 
@@ -1070,11 +1074,15 @@ static void collect_ids(msc_ctx *x, msc_deck *d)
         msc_card *c = &d->bulk[i];
         renumber_ids(x, c);
         /* every element id, renumbered by this pass or not, and a
-         * CAERO1's boxes (EID to EID + NSPAN*NCHORD - 1)              */
+         * CAERO1's boxes (EID to EID + NSPAN*NCHORD - 1), a CAERO2's
+         * elements (EID to EID + NSB + NINT - 1)                         */
         if (c->name[0] == 'C') {
             int eid = msc_fi(c, 1, 0), last = eid;
             if (msc_streq(c->name, "CAERO1"))
                 last = eid + msc_fi(c, 4, 0) * msc_fi(c, 5, 0) - 1;
+            /* a CAERO2's slender and interference elements (EID up)      */
+            if (msc_streq(c->name, "CAERO2"))
+                last = eid + msc_fi(c, 4, 0) + msc_fi(c, 5, 0) - 1;
             if (last < eid) last = eid;
             if (eid <= ID_LIMIT && last > x->id_floor)
                 x->id_floor = last > ID_LIMIT ? ID_LIMIT : last;
@@ -1766,6 +1774,8 @@ int msc_translate_deck(msc_deck *d, const char *outpath, msc_stats *st)
     ngrid = msc_map_count(&x.grid);
     translate_bulk(&x);
     if (x.fatal) return 1;
+    /* HALO (bodies): the bodies a PAERO1 associates with its panels   */
+    if (msc_body_assoc_check(d)) return 1;
     if (aet_g.active) {
         if (aet_check() || msc_nfatal()) return 1;
         aet_emit(&x.out);

@@ -1022,9 +1022,9 @@ int msc_dyn_emit(const msc_deck *d, const msc_deck *also, msc_list *out, int *wk
             "%.6g): SKJ is multiplied by it after AMG - MSC's WSKJF =\n"
             "WTFACT SKJ - so QHHL, QKHL and QHJL carry it. Written as\n"
             "DMI WKK on the solver's k set: the %d boxes in ascending id,\n"
-            "T3 then R5 of each (%d rows). A k-set dof it does not name\n"
-            "gets no force.%s",
-            sw, wn, nt, ndiag, lo, hi, nb, nk,
+            "T3 then R5 of each%s (%d rows). A k-set dof it does not\n"
+            "name gets no force.%s",
+            sw, wn, nt, ndiag, lo, hi, nb, bk ? ", then the bodies' dofs" : "", nk,
             (W->kind == 2 && G.rf == 10)
                 ? "\nSimcenter 2606's SOL 145 does not find the DMIK spelling\n"
                   "and leaves its forces unweighted; to compare, give it a\n"
